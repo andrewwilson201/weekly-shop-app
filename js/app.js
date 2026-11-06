@@ -61,7 +61,8 @@ function render() {
   tabs.hidden = !ready; settings.hidden = !ready;
   document.getElementById('sync').textContent = navigator.onLine ? '' : 'Offline';
   document.getElementById('who').innerHTML = ready ? Object.entries(st.household.memberNames || {}).map(([uid, name]) => avatar({ uid, name })).join('') : '';
-  tabs.querySelectorAll('a').forEach(a => a.classList.toggle('on', a.dataset.tab === route || (route === 'order' && a.dataset.tab === 'shop') || (route === 'meal' && a.dataset.tab === 'meals')));
+  const tab = { shop: 'week', order: 'week', meal: 'meals', staples: 'meals' }[route] || route;
+  tabs.querySelectorAll('a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
   const focus = remember();
   if (!st.ready) { $main.innerHTML = '<div class="loading"><span class="spinner"></span></div>'; return; }
   if (!st.user) { $main.innerHTML = viewSignIn(); bind(); return; }
@@ -153,15 +154,29 @@ const activeOrder = () => st.orders.find(o => !['placed', 'failed', 'cancelled']
 const deliveryDate = () => week()?.deliveryDate || null;
 const pickedMeals = () => Object.keys(week()?.picks || {}).map(mealById).filter(Boolean);
 const TARGET = 5;
+// This week's order, running or placed.
+const weekOrder = () => activeOrder() || st.orders.find(o => o.state === 'placed' && o.week === thisWeekId());
+const orderLine = o => o.state === 'placed'
+  ? `${fmtDay(o.deliveryDate)}${o.slot ? `, ${fmtTime(o.slot.start_time)}–${fmtTime(o.slot.end_time)}` : ''}${o.total ? ` · ${money(o.total)}` : ''}`
+  : stateLabel(o.state);
+
+// The weekly job is three steps: dinners, shop, order. Each screen in it shows
+// the steps so it's clear where you are and what comes next.
+function flow(now) {
+  const w = week() || {};
+  const o = weekOrder();
+  const done = { week: Object.keys(w.picks || {}).length > 0 && !!w.deliveryDate, shop: !!o, order: o?.state === 'placed' };
+  return `<nav class="flow" aria-label="This week's steps">` + [['week', 'Dinners'], ['shop', 'Shop'], ['order', 'Order']].map(([r, label], i) =>
+    `<a href="#/${r}" class="${r === now ? 'now' : ''}${done[r] ? ' done' : ''}"${r === now ? ' aria-current="step"' : ''}><span class="n">${done[r] && r !== now ? icon('check') : i + 1}</span>${label}</a>`).join('<span class="sep"></span>') + `</nav>`;
+}
 
 // ---------- This week ----------
 function viewWeek() {
   const w = week();
   const order = activeOrder();
-  let html = head('This week', { eyebrow: `Week of ${fmtDay(thisWeekId(), { day: 'numeric', month: 'long' })}` });
-  if (order) html += `<a class="notice ok" href="#/order">${icon('truck')}<span class="grow"><b>Order in progress</b><br>${esc(stateLabel(order.state))}</span>${icon('chevron', 'chev')}</a>`;
-  const lastPlaced = st.orders.find(o => o.state === 'placed' && o.week === thisWeekId());
-  if (lastPlaced) html += `<div class="notice ok">${icon('check')}<span class="grow"><b>Ordered</b> for ${fmtDay(lastPlaced.deliveryDate)}${lastPlaced.slot ? `, ${fmtTime(lastPlaced.slot.start_time)}–${fmtTime(lastPlaced.slot.end_time)}` : ''}${lastPlaced.total ? ` · ${money(lastPlaced.total)}` : ''}</span></div>`;
+  const wo = weekOrder();
+  let html = head('This week', { eyebrow: `Week of ${fmtDay(thisWeekId(), { day: 'numeric', month: 'long' })}`, sub: wo ? '' : `Pick ${TARGET} dinners and a delivery day. The shop is worked out from them.` }) + flow('week');
+  // A running or placed order is shown once, in the bar at the bottom.
 
   const away = st.household.away || [];
   const nowAway = awayOn(away, today()) || (awayWeek(away, thisWeekId()) && away.find(a => a.to >= today()));
@@ -176,10 +191,8 @@ function viewWeek() {
   }
   const picks = w.picks || {};
   const n = Object.keys(picks).length;
-  html += `<div class="card"><div class="pickhead"><b>${n}</b><span class="muted">of ${TARGET} dinners picked</span><span class="spacer"></span>
-    ${w.ideasBy === 'claude' ? `<span class="chip">${icon('sparkle')} Ideas by Claude</span>` : ''}</div>
-    <div class="progress"><span style="width:${Math.min(100, n / TARGET * 100)}%"></span></div></div>`;
-  html += section('Pick your dinners');
+  // How many are picked is shown once, in the bar at the bottom.
+  html += section('1. Pick your dinners', { right: `<span class="small muted">${w.ideasBy === 'claude' ? 'Ideas by Claude' : 'From your meals'}</span>` });
   w.offered.forEach(id => {
     const m = mealById(id); if (!m) return;
     const p = picks[id];
@@ -196,7 +209,7 @@ function viewWeek() {
     <button class="btn small outline" data-act="remakeIdeas">${icon('shuffle')} Swap the unpicked ones</button>
     <button class="btn small outline" data-act="addIdea">${icon('plus')} Add another meal</button></div>`;
 
-  html += section('Delivery day');
+  html += section('2. Choose a delivery day');
   html += `<div class="days">`;
   for (let i = 1; i <= 7; i++) {
     const d = addDays(today(), i);
@@ -204,9 +217,10 @@ function viewWeek() {
     html += `<button data-act="day" data-id="${d}" class="${w.deliveryDate === d ? 'on' : ''}" ${off ? 'disabled title="Away"' : ''} aria-pressed="${w.deliveryDate === d}"><small>${fmtDay(d, { weekday: 'short' })}</small><b>${fmtDay(d, { day: 'numeric' })}</b><span>${off ? 'Away' : fmtDay(d, { month: 'short' })}</span></button>`;
   }
   html += `</div>`;
-  const listCount = st.list.filter(x => !x.done).length;
-  html += `<div class="actionbar"><div><span class="sum"><b>${plural(n, 'dinner')} · ${w.deliveryDate ? fmtDay(w.deliveryDate) : 'no day yet'}</b><span>${plural(listCount, 'item')} on the list</span></span>
-    <a class="btn primary" href="#/shop">Build the shop ${icon('chevron')}</a></div></div>`;
+  html += wo
+    ? `<div class="actionbar"><div><span class="sum"><b>${wo.state === 'placed' ? 'Ordered' : activeOrder() && ['need_code', 'choose_slot', 'review', 'needs_you'].includes(wo.state) ? 'The order needs you' : 'Order in progress'}</b><span>${esc(orderLine(wo))}</span></span><a class="btn primary" href="#/order">View order ${icon('chevron')}</a></div></div>`
+    : `<div class="actionbar"><div><span class="sum"><b>${n} of ${TARGET} dinners</b><span>${w.deliveryDate ? `Delivery ${fmtDay(w.deliveryDate)}` : 'Choose a delivery day'}</span></span>
+    <a class="btn primary" href="#/shop">Next: the shop ${icon('chevron')}</a></div></div>`;
   return html;
 }
 actions.loadStarter = () => run(async () => {
@@ -232,7 +246,7 @@ actions.addIdea = () => { location.hash = '#/meals'; };
 function viewList() {
   const items = st.list;
   const open = items.filter(i => !i.done).length;
-  let html = head('Shopping list', { eyebrow: 'Shared', sub: 'Anything that isn\'t a staple or in a meal. It goes in this week\'s shop.' });
+  let html = head('Shopping list', { eyebrow: 'Shared', sub: 'Add things as you run out during the week. They go in the next shop with the dinners and staples.' });
   html += `<form data-form="addItem" class="inputrow"><input type="text" name="text" data-keep="newItem" placeholder="Add an item, e.g. olive oil x2" autocomplete="off" enterkeyhint="done" aria-label="New item"><button class="btn primary" aria-label="Add">${icon('plus')} Add</button></form>`;
   if (!items.length) return html + empty('list', 'The list is empty', 'Add anything you need. Both of you see changes straight away.');
   html += section('On the list', { count: open, right: items.some(i => i.done) ? '<button class="btn small ghost" data-act="clearDone">Clear ticked</button>' : '' });
@@ -265,26 +279,25 @@ const lineRow = l => `<li><input type="checkbox" class="check" checked data-chan
 function viewShop() {
   const w = week();
   const order = activeOrder();
-  if (order) return head('The shop') + `<a class="notice ok" href="#/order">${icon('truck')}<span class="grow"><b>An order is in progress.</b><br>${esc(stateLabel(order.state))}</span>${icon('chevron', 'chev')}</a>`;
+  if (order) return head('The shop') + flow('shop') + `<a class="notice info" href="#/order">${icon('truck')}<span class="grow"><b>An order is in progress</b><br>${esc(stateLabel(order.state))}. The shop can't change until it's finished.</span>${icon('chevron', 'chev')}</a>`;
   const lines = shopLines();
   const extras = w?.extras || {};
-  let html = head('The shop', { eyebrow: w?.deliveryDate ? `Delivery ${fmtDay(w.deliveryDate, { weekday: 'long', day: 'numeric', month: 'long' })}` : 'Next shop', sub: 'Everything going in the basket. Untick anything you don\'t need.' });
-  if (!w?.deliveryDate) html += `<div class="notice warn">${icon('calendar')}<span class="grow">Pick a delivery day on <a href="#/week">This week</a> first. Staples below are worked out for ${fmtDay(addDays(today(), 2))}.</span></div>`;
+  let html = head('The shop', { eyebrow: w?.deliveryDate ? `Delivery ${fmtDay(w.deliveryDate, { weekday: 'long', day: 'numeric', month: 'long' })}` : 'Next shop', sub: 'Everything that will go in the basket. Untick anything you don\'t need, then send it to Sainsbury\'s.' }) + flow('shop');
+  if (!w?.deliveryDate) html += `<a class="notice warn" href="#/week">${icon('calendar')}<span class="grow"><b>Choose a delivery day first</b><br>It decides which staples are due.</span>${icon('chevron', 'chev')}</a>`;
   const by = src => lines.filter(l => l.source === src);
-  html += `<div class="stats"><div class="stat"><b>${by('staple').length}</b><span>Staples</span></div><div class="stat"><b>${by('meal').length}</b><span>For meals</span></div><div class="stat"><b>${by('list').length}</b><span>From the list</span></div></div>`;
 
   const staples = by('staple');
   const skipped = Object.entries(extras).filter(([k, v]) => k.startsWith('staple:') && v === false).length;
   html += section('Staples due', { count: staples.length, right: `${staples.length ? '<button class="btn small ghost" data-act="skipStaples">Skip all staples</button>' : ''}${skipped ? `<button class="btn small ghost" data-act="unskipStaples">Put back ${skipped}</button>` : ''}` });
   if (!staples.length) html += `<div class="card soft"><p class="small muted">${st.staples.length ? 'None this week.' : 'No staples yet. Import them in Settings.'}</p></div>`;
-  else html += `<details class="card flush disclosure" ${keep.staplesOpen === false ? '' : 'open'} data-toggle="staplesOpen"><summary>${icon('layers')} ${plural(staples.length, 'thing')} you buy regularly</summary><ul class="list inset-check">${staples.map(lineRow).join('')}</ul></details>`;
+  else html += `<details class="card flush disclosure" ${keep.staplesOpen ? 'open' : ''} data-toggle="staplesOpen"><summary>${icon('layers')} ${plural(staples.length, 'staple')} due, from your past orders</summary><ul class="list inset-check">${staples.map(lineRow).join('')}</ul></details>`;
 
   const meals = by('meal');
   html += section('For the meals', { count: meals.length });
-  html += meals.length ? `<div class="card flush"><ul class="list inset-check">${meals.map(lineRow).join('')}</ul></div>` : `<div class="card soft"><p class="small muted">No meals picked yet. <a href="#/week">Pick some</a>.</p></div>`;
+  html += meals.length ? `<div class="card flush"><ul class="list inset-check">${meals.map(lineRow).join('')}</ul></div>` : `<div class="card soft"><p class="small muted">No meals picked yet. <a href="#/week">Pick dinners</a>.</p></div>`;
   const list = by('list');
   html += section('From the list', { count: list.length });
-  html += list.length ? `<div class="card flush"><ul class="list inset-check">${list.map(lineRow).join('')}</ul></div>` : `<div class="card soft"><p class="small muted">Nothing on the list.</p></div>`;
+  html += list.length ? `<div class="card flush"><ul class="list inset-check">${list.map(lineRow).join('')}</ul></div>` : `<div class="card soft"><p class="small muted">Nothing on the list. <a href="#/list">Add something</a>.</p></div>`;
 
   // Staples not added: suggestions and ones switched off
   const off = st.staples.filter(s => !lines.some(l => l.key === `staple:${s.id}`)).map(s => ({ s, status: stapleStatus(s, w?.deliveryDate || addDays(today(), 2)) }))
@@ -296,8 +309,8 @@ function viewShop() {
       offMeal.map(x => `<li><input type="checkbox" class="check" data-change="lineOn" data-id="${esc(x.key)}" aria-label="Add"><span class="grow"><span class="name">${esc(x.name)}</span><span class="meta">${esc(x.for)}</span></span></li>`).join('') +
       `</ul></details>`;
   }
-  html += `<div class="actionbar"><div><span class="sum"><b>${plural(lines.length, 'item')}</b><span>Substitutions off · you approve the total</span></span>
-    <button class="btn primary" data-act="order" ${w?.deliveryDate && lines.length ? '' : 'disabled'}>${icon('cart')} Order from Sainsbury's</button></div></div>`;
+  html += `<div class="actionbar"><div><span class="sum"><b>${plural(lines.length, 'item')}</b><span>You approve the total before paying</span></span>
+    <button class="btn primary" data-act="order" ${w?.deliveryDate && lines.length ? '' : 'disabled'}>${icon('cart')} Send to Sainsbury's</button></div></div>`;
   return html;
 }
 const setExtra = (key, val) => S.setH(['weeks', thisWeekId()], { extras: { [key]: val } });
@@ -348,9 +361,9 @@ function viewOrder() {
   if (!o) return head('Order') + empty('cart', 'No orders yet', 'Build the shop and tap Order to start one.', '<a class="btn primary" href="#/shop">Go to the shop</a>');
   const idx = STEPS.findIndex(s => s[0] === o.state);
   const [hic, htone, htitle, hsub] = HERO[o.state] || HERO.requested;
-  let html = head(`Order for ${fmtDay(o.deliveryDate, { weekday: 'long', day: 'numeric', month: 'short' })}`, { eyebrow: 'Sainsbury\'s order', sub: `Started by ${esc(o.requestedBy?.name)}${o.slot ? ` · delivery ${fmtTime(o.slot.start_time)}–${fmtTime(o.slot.end_time)}` : ''}` });
-  html += `<div class="hero"><div class="status"><span class="dot-lg ${htone}">${icon(hic)}</span><span class="grow"><h3>${htitle}</h3>${hsub ? `<p class="sub">${hsub}</p>` : ''}</span></div>
-    ${idx >= 0 ? `<div class="bar">${STEPS.map((s, i) => `<span class="${i < idx || o.state === 'placed' ? 'done' : i === idx ? 'now' : ''}"></span>`).join('')}</div>` : ''}</div>`;
+  let html = head(`Order for ${fmtDay(o.deliveryDate, { weekday: 'long', day: 'numeric', month: 'short' })}`, { eyebrow: 'Sainsbury\'s order', sub: `Started by ${esc(o.requestedBy?.name)}${o.slot ? ` · delivery ${fmtTime(o.slot.start_time)}–${fmtTime(o.slot.end_time)}` : ''}` }) + (o.week === thisWeekId() ? flow('order') : '');
+  const placedSub = o.state === 'placed' ? `${o.orderNumber ? `Sainsbury's order ${esc(o.orderNumber)}. ` : ''}Staples, meals and the list have been updated.` : hsub;
+  html += `<div class="hero"><div class="status"><span class="dot-lg ${htone}">${icon(hic)}</span><span class="grow"><h3>${htitle}</h3>${placedSub ? `<p class="sub">${placedSub}</p>` : ''}</span></div></div>`;
   if (o.message) html += `<div class="notice ${o.state === 'failed' || o.state === 'needs_you' ? 'danger' : ''}">${icon('info')}<span class="grow">${esc(o.message)}</span></div>`;
 
   if (o.state === 'need_code') {
@@ -386,11 +399,12 @@ function viewOrder() {
         <button class="btn primary lg" style="flex:1" data-act="approve" ${o.approvedBy ? 'disabled' : ''}>${o.approvedBy ? 'Placing…' : `Approve ${money(o.total)}`}</button></div></div></div>`;
     }
   }
-  if (o.state === 'placed') html += `<div class="notice ok">${icon('check')}<span class="grow"><b>Order placed.</b> ${o.orderNumber ? `Sainsbury's order ${esc(o.orderNumber)}.` : ''} Staples, meals and the list have been updated.</span></div>`;
-  html += section('Progress');
-  html += `<div class="card flush"><ul class="steps">` + STEPS.map(([k, label], i) => { const c = i < idx || o.state === 'placed' ? 'done' : i === idx ? 'now' : ''; return `<li class="${c}"><span class="dot">${c === 'done' ? icon('check') : ''}</span>${label}</li>`; }).join('') + `</ul></div>`;
+  // Once it's placed, the step-by-step progress is history: tuck it away.
+  const stepsHtml = `<ul class="steps">` + STEPS.map(([k, label], i) => { const c = i < idx || o.state === 'placed' ? 'done' : i === idx ? 'now' : ''; return `<li class="${c}"><span class="dot">${c === 'done' ? icon('check') : ''}</span>${label}</li>`; }).join('') + `</ul>`;
+  if (o.state !== 'placed') html += section('Progress') + `<div class="card flush">${stepsHtml}</div>`;
   if (!['placed', 'failed', 'cancelled', 'review'].includes(o.state)) html += `<div class="row end" style="margin-top:4px"><button class="btn small ghost danger" data-act="cancelOrder">Cancel order</button></div>`;
-  if (['failed', 'cancelled'].includes(o.state)) html += `<a class="btn primary block" href="#/shop">Back to the shop</a>`;
+  if (['failed', 'cancelled'].includes(o.state)) html += `<a class="btn primary block" href="#/shop">Back to the shop to try again</a>`;
+  if (o.state === 'placed') html += `<a class="btn outline block" href="#/week" style="margin-top:12px">Back to this week</a>`;
   if (o.log?.length) html += `<details class="card flush disclosure" style="margin-top:12px"><summary>${icon('list')} Details</summary><ul class="list compact small">${o.log.slice(-20).map(l => `<li class="muted">${esc(l)}</li>`).join('')}</ul></details>`;
   return html;
 }
@@ -412,10 +426,11 @@ actions.cancelOrder = () => {
   run(() => S.updateH(['orders', curOrder().id], { cancelRequested: S.me() }));
 };
 
-// ---------- Meals ----------
+// ---------- Meals and staples (the household's library) ----------
+const libTabs = now => `<div class="seg" role="tablist">${[['meals', 'Meals'], ['staples', 'Staples']].map(([r, l]) => `<a href="#/${r}" role="tab" class="${r === now ? 'on' : ''}" aria-selected="${r === now}">${l}</a>`).join('')}</div>`;
 function viewMeals() {
   const meals = [...st.meals].filter(m => !m.archived).sort((a, b) => (b.timesChosen || 0) - (a.timesChosen || 0) || a.name.localeCompare(b.name));
-  let html = head('Meals', { eyebrow: 'Library', sub: 'Your dinners. The most picked come up as favourites each week.', right: `<a class="btn small tonal" href="#/meal/new">${icon('plus')} New</a>` });
+  let html = libTabs('meals') + head('Meals', { sub: 'Your dinners. Each Sunday, ideas for the week are picked from these and from Claude.', right: `<a class="btn small tonal" href="#/meal/new">${icon('plus')} New</a>` });
   html += `<form class="card" data-form="importLink"><h3 style="display:flex;gap:8px;align-items:center">${icon('link')} Add a recipe from a link</h3>
       <p class="small muted" style="margin:4px 0 12px">Paste a recipe page, or share it to Weekly Shop from your phone. The ingredients are added for you.</p>
       <div class="inputrow"><input type="url" name="url" data-keep="importUrl" placeholder="https://www.bbcgoodfood.com/recipes/…" inputmode="url" autocomplete="off" required aria-label="Recipe link"><button class="btn primary">Add recipe</button></div>
@@ -505,7 +520,7 @@ function viewStaples() {
   const d = deliveryDate() || addDays(today(), 2);
   const groups = [['add', 'Due this shop'], ['suggest', 'For meals, when needed'], ['not_due', 'Not due yet'], ['lapsed', 'Not bought lately'], ['dropped', 'Turned off']];
   const rows = st.staples.map(s => ({ s, status: stapleStatus(s, d) }));
-  let html = head('Staples', { eyebrow: 'Regulars', sub: `Things you buy regularly, learned from your orders. “Due” ones go in the shop for ${fmtDay(d)}.` });
+  let html = libTabs('staples') + head('Staples', { sub: `Things you buy regularly, learned from your orders. The ones due go in the shop for ${fmtDay(d)} automatically. Switch one off to stop buying it.` });
   if (!rows.length) return html + `<div class="card">${empty('layers', 'No staples yet', 'Import them from your order history in Settings.', '<a class="btn primary" href="#/settings">Open Settings</a>')}</div>`;
   html += `<div class="search" style="margin-bottom:4px">${icon('search')}<input type="search" placeholder="Search staples" data-keep="stapleSearch" data-filter="stapleList" aria-label="Search staples"></div>`;
   html += `<div id="stapleList">`;

@@ -66,6 +66,7 @@ assert((await a.$$('.meal.on')).length === 3, 'picks from both people show up li
 await a.click('.days button >> nth=1');
 await sleep(600);
 await a.screenshot({ path: `${SHOTS}/03-week.png`, fullPage: true });
+assert(await a.locator('.tabs a').count() === 3 && await a.isVisible('.flow a.now:has-text("Dinners")'), 'three tabs, and the week shows its steps');
 
 // Shared list
 await b.goto(`${BASE}#/list`);
@@ -128,11 +129,12 @@ await a.waitForSelector('button:has-text("Put back")');
 assert(await a.isVisible('text=None this week'), 'skip all staples empties the staples section');
 await a.click('button:has-text("Put back")');
 await a.waitForSelector('button:has-text("Skip all staples")');
+await a.click('details[data-toggle=staplesOpen] > summary'); // regulars start folded away
 const firstStaple = await a.locator('details[data-toggle=staplesOpen] .name').first().innerText();
 await a.locator('details[data-toggle=staplesOpen] input.check').first().click();
 await sleep(800);
 await a.screenshot({ path: `${SHOTS}/06b-shop-staples.png`, fullPage: true });
-await a.click('button:has-text("Order from Sainsbury")');
+await a.click('button:has-text("Send to Sainsbury")');
 await a.waitForSelector('text=Starting the order helper');
 
 // Worker with the pretend shop
