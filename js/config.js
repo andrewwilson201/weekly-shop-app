@@ -10,3 +10,7 @@ export const FIREBASE_CONFIG = {
   messagingSenderId: '746091034396',
   appId: '1:746091034396:web:13ee03dc52838c3868ecd9',
 };
+
+// Web push key for phone notifications, from Firebase console › Project settings ›
+// Cloud Messaging › Web Push certificates. Public by design, like the config above.
+export const VAPID_KEY = 'BNwrSZYA574TH4qkCX25xY_M1uEJEoKHnLdoCMiAEHuriihCUMC84Q7jiDFk8S2d3jKPHZEzSYbff-TKTQ4oOaI';

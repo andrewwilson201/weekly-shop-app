@@ -2,4 +2,5 @@
 // Rebuild: npm i firebase esbuild && npx esbuild tools/firebase-entry.js --bundle --format=esm --minify --target=es2020 --legal-comments=none --outfile=vendor/firebase.js
 export { initializeApp } from 'firebase/app';
 export { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, connectAuthEmulator, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+export { getMessaging, getToken, deleteToken, isSupported as messagingSupported, onMessage } from 'firebase/messaging';
 export { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, getDocs, setDoc, updateDoc, addDoc, deleteDoc, collection, query, where, orderBy, limit, onSnapshot, writeBatch, serverTimestamp, arrayUnion, deleteField, increment, connectFirestoreEmulator } from 'firebase/firestore';

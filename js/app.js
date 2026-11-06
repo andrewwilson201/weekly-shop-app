@@ -459,7 +459,9 @@ function viewStaples() {
   if (!rows.length) return html + `<p class="empty">No staples yet. Import them in <a href="#/settings">Settings</a>.</p>`;
   html += `<ul class="list card">` + rows.map(({ s, status }) => `<li><span class="grow"><span class="name">${esc(s.name)}</span><br>
       <span class="meta">${skipRule(s) === 'every_week' ? 'Every week' : s.every_days ? `About every ${s.every_days} days` : ''}${s.last_bought ? ` · last ${fmtDay(s.last_bought)}` : ''} · ×${s.quantity || 1}${s.skips ? ` · left out ${s.skips}× running` : ''}</span>
-      ${s.learned && s.skips >= 3 ? `<br><span class="meta">${esc(s.learned)} <a href="#" data-act="resetSkips" data-id="${s.id}">Undo</a></span>` : ''}</span>
+      ${s.learned && s.skips >= 3 ? `<br><span class="meta">${esc(s.learned)} <a href="#" data-act="resetSkips" data-id="${s.id}">Undo</a></span>` : ''}
+      ${s.freqNote ? `<br><span class="meta">${esc(s.freqNote)}</span>` : ''}
+      ${s.times_bought ? `<details data-toggle="hist-${s.id}"><summary class="meta">Bought ${s.times_bought}×${(s.history || []).length ? ', see when' : ''}</summary>${(s.history || []).length ? `<span class="meta">${[...s.history].reverse().map(x => `${fmtDay(x.date)}${x.qty > 1 ? ` ×${x.qty}` : ''}`).join(' · ')}</span>` : '<span class="meta">Dates are logged from your first order in the app.</span>'}</details>` : ''}</span>
       <span class="pill">${label[status]}</span>
       <button class="btn small" data-act="dropStaple" data-id="${s.id}">${s.dropped ? 'Turn on' : 'Turn off'}</button></li>`).join('') + `</ul>`;
   return html;
@@ -479,6 +481,9 @@ function viewSettings() {
       <div class="row" style="margin-top:10px"><button class="btn primary" data-act="share" data-id="${esc(link)}">Share invite link</button>
       <button class="btn small" data-act="newInvite">Make a new link</button></div>
       <p class="small muted">A new link stops the old one working. People already in stay in.</p></div>
+    <div class="card"><h2 style="margin-top:0">Notifications</h2>
+      <p class="small muted">Get a notification on this phone when Sunday's ideas are ready, when Sainsbury's needs the SMS code, and when the basket is ready to approve. Each person turns it on on their own phone.${/iPhone|iPad/.test(navigator.userAgent) && !navigator.standalone ? ' On iPhone, add Weekly Shop to your home screen first (Share › Add to Home Screen) and turn this on from there.' : ''}</p>
+      ${S.notificationsOn() ? `<div class="row"><span class="chip ok">On for this phone</span><button class="btn small" data-act="notifyOff">Turn off</button></div>` : `<button class="btn primary" data-act="notifyOn">Turn on notifications</button>`}</div>
     <form class="card" data-form="saveNotes"><h2 style="margin-top:0">About your household</h2>
       <p class="small muted">Claude reads this when it picks the week's ideas: who's eating, dislikes, allergies, how adventurous to be.</p>
       <textarea name="notes" rows="4" data-keep="notes" placeholder="2 adults, children aged 5 and 7. Mild spice for the kids. No mushrooms.">${esc(h.notes || '')}</textarea>
@@ -492,6 +497,8 @@ function viewSettings() {
       <input type="file" accept="application/json" data-change="importFile"></div>
     <div class="card"><p class="small muted">Signed in as ${esc(st.user.email)}</p><button class="btn" data-act="signOut">Sign out</button></div>`;
 }
+actions.notifyOn = () => run(async () => { await S.enableNotifications(); render(); }, 'Notifications are on for this phone');
+actions.notifyOff = () => run(async () => { await S.disableNotifications(); render(); }, 'Notifications are off for this phone');
 actions.saveNotes = f => { const notes = f.notes.value.trim().slice(0, 1000); delete keep.notes; run(() => S.updateH([], { notes }), 'Saved'); };
 actions.addAway = f => {
   const from = f.from.value, to = f.to.value;

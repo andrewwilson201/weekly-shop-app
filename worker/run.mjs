@@ -15,6 +15,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 
 import { FakeSainsburys } from './fake.mjs';
 import { makeJobs } from './jobs.mjs';
+import { notify } from './notify.mjs';
 
 // SAINSBURYS_FAKE=1 swaps in a pretend shop, for testing the app end to end.
 // The real one loads Playwright, so it's imported only when needed.
@@ -24,7 +25,7 @@ async function makeShop(opts) {
   const { Sainsburys: Real } = await import('./sainsburys.mjs');
   return new Real(opts);
 }
-import { pickIdeas, weekId, iso, daysBetween, awayWeek, SKIPS_TO_SUGGEST } from '../js/plan.js';
+import { pickIdeas, weekId, iso, daysBetween, awayWeek, SKIPS_TO_SUGGEST, learnStaple } from '../js/plan.js';
 
 const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
 initializeApp(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: process.env.GCLOUD_PROJECT || 'weekly-shop-177b1' }
@@ -50,6 +51,7 @@ async function ideas() {
     if ((await ref.get()).exists) continue;
     if (awayWeek(h.data().away, sunday)) { console.log(`Away for week ${sunday}, no ideas`); continue; }
     await makeIdeas(h, sunday, 'sunday');
+    await notify(h, { title: 'This week\'s meal ideas are ready', body: 'Pick your dinners and a delivery day.', link: '#/week', tag: 'ideas' });
   }
 }
 
@@ -133,6 +135,7 @@ async function processOrder({ h, ref }) {
     await log('Logging in to Sainsbury\'s');
     await shop.login(process.env.SAINSBURYS_EMAIL, process.env.SAINSBURYS_PASSWORD, async () => {
       await update({ state: 'need_code', smsCode: FieldValue.delete() });
+      await notify(h, { title: 'Sainsbury\'s needs the SMS code', body: 'Type the 6-digit code from your text into the app.', link: '#/order', tag: 'order' });
       const code = await waitFor(d => d.smsCode, 10);
       if (!code) throw new Error('No SMS code came in within 10 minutes.');
       await update({ smsCode: FieldValue.delete(), state: 'logging_in' });
@@ -146,6 +149,7 @@ async function processOrder({ h, ref }) {
       .map(s => ({ start_time: s.start_time, end_time: s.end_time, price: s.price, is_green: !!s.is_green, date: londonDate(s.start_time), booking_key: s.booking_key }));
     await update({ state: 'choose_slot', slots: near.map(({ booking_key, ...s }) => s), slotChoice: FieldValue.delete() });
     await log(`${near.length} free slots around ${day}`);
+    await notify(h, { title: 'Pick a delivery time', body: `${near.length} free slots around your chosen day.`, link: '#/order', tag: 'order' });
     const choice = await waitFor(d => d.slotChoice, 30);
     if (!choice) throw new Error('No delivery time was picked within 30 minutes.');
     let slot = near.find(s => s.start_time === choice);
@@ -188,6 +192,7 @@ async function processOrder({ h, ref }) {
       return;
     }
     await update({ state: 'review', lines, basket, total });
+    await notify(h, { title: `Basket ready: £${Number(total).toFixed(2)}`, body: 'Check it and tap Approve to place the order.', link: '#/order', tag: 'order' });
 
     // Approval (the slot is held for about 2 hours)
     const holdMins = Math.max(5, (new Date(res.reserved_until) - Date.now()) / 60000 - 5);
@@ -207,6 +212,7 @@ async function processOrder({ h, ref }) {
     if (match) orderNumber = orderNumber || String(match.order_uid);
     await update({ state: 'placed', orderNumber, card: placed.card || '', total: placed.total || total, placedAt: FieldValue.serverTimestamp() });
     await log(`Order placed${orderNumber ? ` (#${orderNumber})` : ''}`);
+    await notify(h, { title: 'Order placed', body: `£${Number(placed.total || total).toFixed(2)}, delivery ${new Date(res.slot.start_time).toLocaleString('en-GB', { weekday: 'long', hour: 'numeric', minute: '2-digit', timeZone: 'Europe/London' })}.`, link: '#/order', tag: 'order' });
     await afterPlaced(h, order, lines, res.slot.start_time.slice(0, 10));
   } catch (e) {
     if (e instanceof Cancelled) {
@@ -215,6 +221,7 @@ async function processOrder({ h, ref }) {
       await log('Cancelled');
     } else if (e.code === 'BANK_CHECK') {
       await update({ state: 'needs_you', message: e.message });
+      await notify(h, { title: 'The order needs you', body: e.message.slice(0, 150), link: '#/order', tag: 'order' });
       await log(e.message);
     } else {
       console.error(process.env.WORKER_QUIET ? `Order stopped: ${e.message}` : e);
@@ -237,11 +244,17 @@ function londonDate(t) {
 // Record what was bought: staples' last_bought, meals chosen, list items done.
 async function afterPlaced(h, order, lines, delivery) {
   const b = db.batch();
+  // Every staple bought, whether it came in as a staple, a meal ingredient or a
+  // list item (same product), gets the date logged and its frequency re-learned.
+  const staples = new Map((await h.ref.collection('staples').get()).docs.map(d => [d.id, d]));
+  const bought = new Map();
   for (const l of lines) {
     if (l.result !== 'added') continue;
-    if (l.source === 'staple') b.set(h.ref.collection('staples').doc(l.key.slice(7)), { last_bought: delivery, skips: 0, skipped_on: FieldValue.delete() }, { merge: true });
+    const id = l.source === 'staple' ? l.key.slice(7) : l.uid && staples.has(String(l.uid)) ? String(l.uid) : null;
+    if (id && staples.has(id)) bought.set(id, (bought.get(id) || 0) + (l.qty || 1));
     if (l.source === 'list' && l.listId) b.delete(h.ref.collection('list').doc(l.listId));
   }
+  for (const [id, qty] of bought) b.set(staples.get(id).ref, { ...learnStaple(staples.get(id).data(), delivery, qty), skipped_on: FieldValue.delete() }, { merge: true });
   // Staples that were due but unticked: push them back, and count the skip.
   for (const id of order.skippedStaples || []) {
     const ref = h.ref.collection('staples').doc(id);
