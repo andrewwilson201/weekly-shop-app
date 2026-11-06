@@ -46,7 +46,7 @@ Sainsbury's findings (Nov 2026): headless browsers get “Access Denied”, a vi
 
 ## Firebase functions (optional, makes things instant)
 
-Without them, “Ask Claude for ideas”, recipe links and missing ingredients wait for the next worker run (5–15 minutes, GitHub's schedule). The functions in [`functions/`](functions/index.mjs) do the same jobs the moment the app asks, using the same code as the worker ([`worker/jobs.mjs`](worker/jobs.mjs), copied in at deploy time). Orders still go through the worker, because they need a real browser. They need the Blaze plan; at this usage they stay inside the free allowance.
+Without them, “Ask Claude for ideas”, recipe links and missing ingredients wait for the next worker run (5–15 minutes, GitHub's schedule). The functions in [`functions/`](functions/index.mjs) do the same jobs the moment the app asks, using the same code as the worker ([`worker/jobs.mjs`](worker/jobs.mjs), copied in at deploy time). Orders still go through the worker, because they need a real browser, but `startOrder` starts the worker the moment an order is sent, and `sundayIdeas` makes Sunday's ideas on a Firebase schedule (GitHub's own timer can lag by hours or not fire at all). The worker token is a fine-grained GitHub token for this repo with **Actions: read and write**. They need the Blaze plan; at this usage they stay inside the free allowance.
 
 Deploy from [Google Cloud Shell](https://shell.cloud.google.com) (the Firebase CLI is already there):
 
@@ -56,6 +56,7 @@ npm --prefix functions install
 firebase login --no-localhost
 firebase use weekly-shop-177b1
 firebase functions:secrets:set ANTHROPIC_API_KEY
+firebase functions:secrets:set WORKER_GITHUB_TOKEN
 firebase deploy --only functions
 ```
 
