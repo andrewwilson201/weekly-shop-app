@@ -380,7 +380,7 @@ function viewMeals() {
   const inWeek = new Set(week()?.offered || []);
   html += `<ul class="list card" style="margin-top:12px">` + meals.map(m => `<li><a href="#/meal/${m.id}" class="grow" style="text-decoration:none">
       <span class="name">${esc(m.name)}</span><br><span class="meta">${(m.ingredients || []).length} ingredients${m.timesChosen ? ` · picked ${m.timesChosen}×` : ''}${m.lastChosen ? `, last ${fmtDay(m.lastChosen)}` : ''}</span></a>
-      ${week() && !inWeek.has(m.id) ? `<button class="btn small" data-act="offer" data-id="${m.id}">Add to this week</button>` : inWeek.has(m.id) ? '<span class="pill">This week</span>' : ''}</li>`).join('') + `</ul>`;
+      ${week() && !inWeek.has(m.id) ? `<button class="btn small" data-act="offer" data-id="${m.id}">Add to this week</button>` : inWeek.has(m.id) ? '<span class="pill">In this week\'s ideas</span>' : ''}</li>`).join('') + `</ul>`;
   const archived = st.meals.filter(m => m.archived);
   if (archived.length) html += `<details class="card soft"><summary>Removed meals (${archived.length})</summary><ul class="list">${archived.map(m => `<li><span class="grow">${esc(m.name)}</span><button class="btn small" data-act="unarchive" data-id="${m.id}">Restore</button></li>`).join('')}</ul></details>`;
   return html;
