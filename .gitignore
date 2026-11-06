@@ -4,3 +4,5 @@ node_modules/
 seed*.json
 test/shots/
 *-debug.log
+functions/shared/
+functions/node_modules/
