@@ -1,5 +1,5 @@
 import * as S from './store.js';
-import { weekId, iso, addDays, buildShop, stapleStatus, pickIdeas } from './plan.js';
+import { weekId, iso, addDays, buildShop, stapleStatus, pickIdeas, awayOn, awayWeek, skipRule } from './plan.js';
 
 const $main = document.getElementById('main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -77,6 +77,8 @@ $main.addEventListener('change', e => {
   const el = e.target.closest('[data-change]');
   if (el) actions[el.dataset.change]?.(el, e);
 });
+// <details data-toggle="key"> remember whether they're open across live re-renders.
+$main.addEventListener('toggle', e => { const el = e.target; if (el.dataset?.toggle) keep[el.dataset.toggle] = el.open; }, true);
 $main.addEventListener('input', e => { const el = e.target; if (el.dataset?.keep) keep[el.dataset.keep] = el.value; });
 
 // ---------- sign in & household ----------
@@ -135,6 +137,9 @@ function viewWeek() {
   const lastPlaced = st.orders.find(o => o.state === 'placed' && o.week === thisWeekId());
   if (lastPlaced) html += `<div class="card ok"><b>Ordered</b> for ${fmtDay(lastPlaced.deliveryDate)}${lastPlaced.slot ? `, ${fmtTime(lastPlaced.slot.start_time)}–${fmtTime(lastPlaced.slot.end_time)}` : ''}${lastPlaced.total ? ` · ${money(lastPlaced.total)}` : ''}</div>`;
 
+  const away = st.household.away || [];
+  const nowAway = awayOn(away, today()) || (awayWeek(away, thisWeekId()) && away.find(a => a.to >= today()));
+  if (nowAway) html += `<div class="card warn"><b>Holiday mode</b>: away ${fmtDay(nowAway.from)} to ${fmtDay(nowAway.to)}. Sunday ideas are paused for weeks you're away. <a href="#/settings">Change</a></div>`;
   if (!st.meals.length) {
     return html + `<div class="card"><p>No meals yet. Load the starter list of family meals to get going (you can edit them and add your own).</p>
       <button class="btn primary" data-act="loadStarter">Load starter meals</button></div>`;
@@ -160,7 +165,8 @@ function viewWeek() {
   html += `<h2>Delivery day</h2><div class="days">`;
   for (let i = 1; i <= 7; i++) {
     const d = addDays(today(), i);
-    html += `<button data-act="day" data-id="${d}" class="${w.deliveryDate === d ? 'on' : ''}"><b>${fmtDay(d, { weekday: 'short' })}</b><span>${fmtDay(d, { day: 'numeric', month: 'short' })}</span></button>`;
+    const off = awayOn(away, d);
+    html += `<button data-act="day" data-id="${d}" class="${w.deliveryDate === d ? 'on' : ''}" ${off ? 'disabled title="Away"' : ''}><b>${fmtDay(d, { weekday: 'short' })}</b><span>${off ? 'Away' : fmtDay(d, { day: 'numeric', month: 'short' })}</span></button>`;
   }
   html += `</div>`;
   const listCount = st.list.filter(x => !x.done).length;
@@ -229,8 +235,17 @@ function viewShop() {
   const groups = [['staple', 'Staples due'], ['meal', 'For the meals'], ['list', 'From the list']];
   for (const [src, title] of groups) {
     const ls = lines.filter(l => l.source === src);
+    if (src === 'staple') {
+      const skipped = Object.entries(extras).filter(([k, v]) => k.startsWith('staple:') && v === false).length;
+      html += `<div class="row" style="margin:26px 0 10px"><h2 style="margin:0">${title} <span class="muted small">${ls.length}</span></h2><span class="spacer"></span>
+        ${ls.length ? '<button class="btn small" data-act="skipStaples">Skip all staples</button>' : ''}${skipped ? `<button class="btn small" data-act="unskipStaples">Put back ${skipped}</button>` : ''}</div>`;
+      if (!ls.length) { html += `<p class="muted small">${st.staples.length ? 'None this week.' : 'No staples yet. Import them in Settings.'}</p>`; continue; }
+      html += `<details class="card" ${keep.staplesOpen === false ? '' : 'open'} data-toggle="staplesOpen" style="padding-top:8px;padding-bottom:8px"><summary class="small">${ls.length} things you buy regularly. Untick any you don't need.</summary><ul class="list">` + ls.map(l => `<li><input type="checkbox" class="check" checked data-change="lineOff" data-id="${esc(l.key)}" aria-label="Include">
+        <span class="grow"><span class="name">${esc(l.name)}</span>${l.qty > 1 ? ` <span class="pill">×${l.qty}</span>` : ''}</span></li>`).join('') + `</ul></details>`;
+      continue;
+    }
     html += `<h2>${title} <span class="muted small">${ls.length}</span></h2>`;
-    if (!ls.length) { html += `<p class="muted small">${src === 'meal' ? 'No meals picked yet.' : src === 'list' ? 'Nothing on the list.' : 'No staples yet. Import them in Settings.'}</p>`; continue; }
+    if (!ls.length) { html += `<p class="muted small">${src === 'meal' ? 'No meals picked yet.' : 'Nothing on the list.'}</p>`; continue; }
     html += `<ul class="list card">` + ls.map(l => `<li><input type="checkbox" class="check" checked data-change="lineOff" data-id="${esc(l.key)}" aria-label="Include">
       <span class="grow"><span class="name">${esc(l.name)}</span>${l.qty > 1 ? ` <span class="pill">×${l.qty}</span>` : ''}
       ${l.for ? `<br><span class="meta">${esc(l.for.join(', '))}</span>` : ''}</span></li>`).join('') + `</ul>`;
@@ -250,14 +265,18 @@ function viewShop() {
   return html;
 }
 const setExtra = (key, val) => S.setH(['weeks', thisWeekId()], { extras: { [key]: val } });
+actions.skipStaples = () => run(() => S.setH(['weeks', thisWeekId()], { extras: Object.fromEntries(shopLines().filter(l => l.source === 'staple').map(l => [l.key, false])) }), 'Staples skipped this week');
+actions.unskipStaples = () => run(() => S.setH(['weeks', thisWeekId()], { extras: Object.fromEntries(Object.entries(week()?.extras || {}).filter(([k, v]) => k.startsWith('staple:') && v === false).map(([k]) => [k, S.deleteField()])) }));
 actions.lineOff = el => run(() => setExtra(el.dataset.id, false));
 actions.lineOn = el => run(() => setExtra(el.dataset.id, true));
 actions.order = () => run(async () => {
   if (activeOrder()) { location.hash = '#/order'; return; }
   const w = week();
   const lines = shopLines().map(l => Object.fromEntries(Object.entries(l).filter(([, v]) => v !== undefined)));
+  // Staples that would have been added but were unticked: the worker counts these as skips.
+  const skippedStaples = st.staples.filter(s => (w.extras || {})[`staple:${s.id}`] === false && stapleStatus(s, w.deliveryDate) === 'add').map(s => s.id);
   await S.addH(['orders'], {
-    week: thisWeekId(), deliveryDate: w.deliveryDate, state: 'requested', lines, meals: Object.keys(w.picks || {}),
+    week: thisWeekId(), deliveryDate: w.deliveryDate, state: 'requested', lines, skippedStaples, meals: Object.keys(w.picks || {}),
     requestedBy: S.me(), createdAt: S.serverTimestamp(), log: [],
   });
   location.hash = '#/order';
@@ -433,11 +452,13 @@ function viewStaples() {
   let html = `<h1>Staples</h1><p class="sub">Things you buy regularly, worked out from your past orders. “Due” ones go in the shop for ${fmtDay(d)}.</p>`;
   if (!rows.length) return html + `<p class="empty">No staples yet. Import them in <a href="#/settings">Settings</a>.</p>`;
   html += `<ul class="list card">` + rows.map(({ s, status }) => `<li><span class="grow"><span class="name">${esc(s.name)}</span><br>
-      <span class="meta">${s.rule === 'every_week' ? 'Every week' : s.every_days ? `About every ${s.every_days} days` : ''}${s.last_bought ? ` · last ${fmtDay(s.last_bought)}` : ''} · ×${s.quantity || 1}</span></span>
+      <span class="meta">${skipRule(s) === 'every_week' ? 'Every week' : s.every_days ? `About every ${s.every_days} days` : ''}${s.last_bought ? ` · last ${fmtDay(s.last_bought)}` : ''} · ×${s.quantity || 1}${s.skips ? ` · left out ${s.skips}× running` : ''}</span>
+      ${s.learned && s.skips >= 3 ? `<br><span class="meta">${esc(s.learned)} <a href="#" data-act="resetSkips" data-id="${s.id}">Undo</a></span>` : ''}</span>
       <span class="pill">${label[status]}</span>
       <button class="btn small" data-act="dropStaple" data-id="${s.id}">${s.dropped ? 'Turn on' : 'Turn off'}</button></li>`).join('') + `</ul>`;
   return html;
 }
+actions.resetSkips = el => run(() => S.updateH(['staples', el.dataset.id], { skips: 0, learned: S.deleteField(), skipped_on: S.deleteField() }));
 actions.dropStaple = el => run(() => { const s = st.staples.find(x => x.id === el.dataset.id); return S.updateH(['staples', s.id], { dropped: !s.dropped }); });
 
 // ---------- Settings ----------
@@ -452,11 +473,21 @@ function viewSettings() {
       <div class="row" style="margin-top:10px"><button class="btn primary" data-act="share" data-id="${esc(link)}">Share invite link</button>
       <button class="btn small" data-act="newInvite">Make a new link</button></div>
       <p class="small muted">A new link stops the old one working. People already in stay in.</p></div>
+    <div class="card"><h2 style="margin-top:0">Holiday mode</h2>
+      <p class="small muted">Add the dates you're away. Sunday meal ideas pause for any week you're away for most of, and delivery days in that time can't be picked.</p>
+      ${(h.away || []).filter(a => a.to >= today()).map((a, i) => `<div class="row" style="margin-bottom:8px"><span class="grow">${fmtDay(a.from, { weekday: 'short', day: 'numeric', month: 'short' })} – ${fmtDay(a.to, { weekday: 'short', day: 'numeric', month: 'short' })}</span><button class="btn small danger" data-act="delAway" data-id="${esc(a.from)}|${esc(a.to)}">Remove</button></div>`).join('')}
+      <form data-form="addAway" class="row" style="flex-wrap:nowrap"><input type="date" name="from" required aria-label="From"><input type="date" name="to" required aria-label="To"><button class="btn primary">Add</button></form></div>
     <div class="card"><h2 style="margin-top:0">Import</h2>
       <p class="small muted">Load staples and meal history from a seed file (made by tools/make-seed.py from your Sainsbury's orders).</p>
       <input type="file" accept="application/json" data-change="importFile"></div>
     <div class="card"><p class="small muted">Signed in as ${esc(st.user.email)}</p><button class="btn" data-act="signOut">Sign out</button></div>`;
 }
+actions.addAway = f => {
+  const from = f.from.value, to = f.to.value;
+  if (!from || !to || to < from) { toast('Pick a start date and an end date after it'); return; }
+  run(() => S.updateH([], { away: [...(st.household.away || []).filter(a => a.to >= today()), { from, to }].sort((a, b) => a.from.localeCompare(b.from)) }), 'Holiday added');
+};
+actions.delAway = el => { const [from, to] = el.dataset.id.split('|'); run(() => S.updateH([], { away: (st.household.away || []).filter(a => !(a.from === from && a.to === to)) })); };
 actions.share = el => {
   const url = el.dataset.id;
   if (navigator.share) navigator.share({ title: 'Weekly Shop', text: 'Join our weekly shop', url }).catch(() => {});

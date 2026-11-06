@@ -109,6 +109,16 @@ await a.goto(`${BASE}#/shop`);
 await a.waitForSelector('text=For the meals');
 assert(await a.isVisible('text=Black beans'), 'imported recipe ingredients are in the shop');
 await a.screenshot({ path: `${SHOTS}/06-shop.png`, fullPage: true });
+// Skip all staples, then put them back, then untick one (which the order records as a skip)
+await a.click('button:has-text("Skip all staples")');
+await a.waitForSelector('button:has-text("Put back")');
+assert(await a.isVisible('text=None this week'), 'skip all staples empties the staples section');
+await a.click('button:has-text("Put back")');
+await a.waitForSelector('button:has-text("Skip all staples")');
+const firstStaple = await a.locator('details[data-toggle=staplesOpen] .name').first().innerText();
+await a.locator('details[data-toggle=staplesOpen] input.check').first().click();
+await sleep(800);
+await a.screenshot({ path: `${SHOTS}/06b-shop-staples.png`, fullPage: true });
 await a.click('button:has-text("Order from Sainsbury")');
 await a.waitForSelector('text=Starting the order helper');
 
@@ -138,5 +148,18 @@ assert(await a.isVisible('text=Something that has nothing'), 'unfound list item 
 await a.goto(`${BASE}#/week`); await sleep(800);
 assert(await a.isVisible('text=Ordered'), 'week shows as ordered');
 await a.screenshot({ path: `${SHOTS}/11-week-after.png`, fullPage: true });
+await a.goto(`${BASE}#/staples`); await sleep(800);
+assert(await a.isVisible(`li:has-text("${firstStaple.replace(/"/g, '')}") >> text=left out 1× running`), 'unticked staple counted as a skip');
+
+// Holiday mode
+await a.goto(`${BASE}#/settings`);
+const d = n => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+await a.fill('form[data-form=addAway] input[name=from]', d(0));
+await a.fill('form[data-form=addAway] input[name=to]', d(10));
+await a.click('form[data-form=addAway] button');
+await a.waitForSelector('text=Holiday added');
+await a.goto(`${BASE}#/week`); await sleep(600);
+assert(await a.isVisible('text=Holiday mode'), 'away banner shows');
+await a.screenshot({ path: `${SHOTS}/12-holiday.png`, fullPage: true });
 await browser.close();
 console.log('All good');

@@ -24,7 +24,7 @@ async function makeShop(opts) {
   const { Sainsburys: Real } = await import('./sainsburys.mjs');
   return new Real(opts);
 }
-import { pickIdeas, weekId, iso, daysBetween } from '../js/plan.js';
+import { pickIdeas, weekId, iso, daysBetween, awayWeek, SKIPS_TO_SUGGEST } from '../js/plan.js';
 
 const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
 initializeApp(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: process.env.GCLOUD_PROJECT || 'music-app-d0f3f' }
@@ -47,6 +47,7 @@ async function ideas() {
   for (const h of await households()) {
     const ref = h.ref.collection('weeks').doc(sunday);
     if ((await ref.get()).exists) continue;
+    if (awayWeek(h.data().away, sunday)) { console.log(`Away for week ${sunday}, no ideas`); continue; }
     const meals = (await h.ref.collection('meals').get()).docs.map(d => ({ id: d.id, ...d.data() }));
     if (!meals.length) continue;
     const offered = pickIdeas(meals, { today: iso(new Date()) });
@@ -261,8 +262,15 @@ async function afterPlaced(h, order, lines, delivery) {
   const b = db.batch();
   for (const l of lines) {
     if (l.result !== 'added') continue;
-    if (l.source === 'staple') b.set(h.ref.collection('staples').doc(l.key.slice(7)), { last_bought: delivery }, { merge: true });
+    if (l.source === 'staple') b.set(h.ref.collection('staples').doc(l.key.slice(7)), { last_bought: delivery, skips: 0, skipped_on: FieldValue.delete() }, { merge: true });
     if (l.source === 'list' && l.listId) b.delete(h.ref.collection('list').doc(l.listId));
+  }
+  // Staples that were due but unticked: push them back, and count the skip.
+  for (const id of order.skippedStaples || []) {
+    const ref = h.ref.collection('staples').doc(id);
+    const s = (await ref.get()).data() || {};
+    const skips = (s.skips || 0) + 1;
+    b.set(ref, { skips, skipped_on: delivery, ...(skips === SKIPS_TO_SUGGEST ? { learned: `Left out ${skips} times in a row, so it's a suggestion now` } : {}) }, { merge: true });
   }
   for (const id of order.meals || []) b.set(h.ref.collection('meals').doc(id), { timesChosen: FieldValue.increment(1), lastChosen: delivery }, { merge: true });
   b.set(h.ref.collection('weeks').doc(order.week), { status: 'ordered', orderedFor: delivery }, { merge: true });

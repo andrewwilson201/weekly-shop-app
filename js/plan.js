@@ -12,21 +12,40 @@ export const iso = d => new Date(d).toISOString().slice(0, 10);
 export const addDays = (s, n) => iso(toDate(s).getTime() + n * DAY);
 export const daysBetween = (a, b) => Math.round((toDate(b) - toDate(a)) / DAY);
 
+// Holiday mode: away = [{ from, to }] (dates, inclusive).
+export const awayOn = (away = [], date) => away.find(a => a.from <= date && date <= a.to) || null;
+// A week's ideas are paused when you're away for most of it (4+ of its 7 days).
+export function awayWeek(away = [], sunday) {
+  let n = 0; for (let i = 0; i < 7; i++) if (awayOn(away, addDays(sunday, i))) n++;
+  return n >= 4;
+}
+
 // The week a plan belongs to is named after its Sunday (the day ideas go out).
 export function weekId(date = new Date()) {
   const d = toDate(iso(date));
   return iso(d.getTime() - d.getUTCDay() * DAY);
 }
 
+// Learning from the shop: a staple left out of an order is "skipped". Its next
+// due date then counts from that order (skipped_on) instead of the last
+// purchase, and 3 skips in a row turn it into a suggestion (see skipRule).
+export const SKIPS_TO_SUGGEST = 3;
+export function skipRule(s) {
+  return (s.skips || 0) >= SKIPS_TO_SUGGEST && s.rule !== 'suggest' ? 'suggest' : s.rule;
+}
+
 export function stapleStatus(s, delivery) {
   if (s.dropped) return 'dropped';
-  if (s.rule === 'every_week') return 'add';
-  if (!s.last_bought || !s.every_days) return s.rule === 'suggest' ? 'suggest' : 'add';
+  const rule = skipRule(s);
+  if (s.skipped_on && daysBetween(s.skipped_on, delivery) < Math.min(7, s.every_days || 7)) return 'not_due';
+  if (rule === 'every_week') return 'add';
+  if (!s.last_bought || !s.every_days) return rule === 'suggest' ? 'suggest' : 'add';
   const since = daysBetween(s.last_bought, delivery);
-  const due = daysBetween(s.last_bought, delivery) + 3 >= s.every_days;
+  const from = s.skipped_on && s.skipped_on > s.last_bought ? s.skipped_on : s.last_bought;
+  const due = daysBetween(from, delivery) + 3 >= s.every_days;
   if (!due) return 'not_due';
-  if (since > 2 * s.every_days + 7) return 'lapsed';
-  return s.rule === 'suggest' ? 'suggest' : 'add';
+  if (since > 2 * s.every_days + 7 && !(s.skipped_on > s.last_bought)) return 'lapsed';
+  return rule === 'suggest' ? 'suggest' : 'add';
 }
 
 // 10 ideas: favourites (most chosen) first, then meals not had for longest,

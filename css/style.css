@@ -149,3 +149,4 @@ label.field > input, label.field > select, label.field > textarea { margin-top: 
 .signin img { width: 72px; height: 72px; }
 details summary { cursor: pointer; color: var(--muted); }
 .empty { color: var(--muted); text-align: center; padding: 24px 8px; }
+.days button:disabled { opacity: .45; cursor: default; }
