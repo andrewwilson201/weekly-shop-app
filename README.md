@@ -2,7 +2,7 @@
 
 A phone app for planning the weekly Sainsbury's shop together: pick the week's meals, keep one shared shopping list, and send it all to Sainsbury's, with a final total to approve before anything is ordered.
 
-It's built the same way as [music-app](https://github.com/andrewwilson201/music-app): a static site (plain HTML, CSS and JavaScript, no build step) on GitHub Pages, with Firebase Auth and Firestore in the same Firebase project (`music-app-d0f3f`). The Sainsbury's part runs as a scheduled GitHub Actions job.
+It's built the same way as [music-app](https://github.com/andrewwilson201/music-app): a static site (plain HTML, CSS and JavaScript, no build step) on GitHub Pages, with Firebase Auth and Firestore in its own Firebase project (kept apart from the music app's, so neither app's key or rules can affect the other). The Sainsbury's part runs as a scheduled GitHub Actions job.
 
 ## How it works
 
@@ -33,8 +33,8 @@ Sainsbury's findings (Nov 2026): headless browsers get “Access Denied”, a vi
 
 ## One-time setup
 
-1. **GitHub Pages**: Settings › Pages › Deploy from a branch › `main` / root. The app is then at https://andrewwilson201.github.io/weekly-shop-app/ (already an authorised domain in Firebase, because the music app uses it).
-2. **Firestore rules**: paste [`firestore.rules`](firestore.rules) into Firebase console › Firestore Database › Rules › Publish. It contains the music app's rules too, because a Firebase project has one rule set; publishing either app's old file alone would break the other.
+1. **GitHub Pages**: Settings › Pages › Deploy from a branch › `main` / root. The app is then at https://andrewwilson201.github.io/weekly-shop-app/ (add `andrewwilson201.github.io` under Firebase Authentication › Settings › Authorized domains).
+2. **Firestore rules**: paste [`firestore.rules`](firestore.rules) into Firebase console › Firestore Database › Rules › Publish. Also turn on Google sign-in under Authentication › Sign-in method.
 3. **Secrets** (Settings › Secrets and variables › Actions):
    - `FIREBASE_SERVICE_ACCOUNT`: the whole JSON from Firebase console › Project settings › Service accounts › Generate new private key.
    - `SAINSBURYS_EMAIL` and `SAINSBURYS_PASSWORD`.

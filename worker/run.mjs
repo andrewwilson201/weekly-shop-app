@@ -28,7 +28,7 @@ async function makeShop(opts) {
 import { pickIdeas, weekId, iso, daysBetween, awayWeek, SKIPS_TO_SUGGEST } from '../js/plan.js';
 
 const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
-initializeApp(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: process.env.GCLOUD_PROJECT || 'music-app-d0f3f' }
+initializeApp(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: process.env.GCLOUD_PROJECT || 'weekly-shop-177b1' }
   : { credential: sa ? cert(JSON.parse(sa)) : applicationDefault() });
 const db = getFirestore();
 
