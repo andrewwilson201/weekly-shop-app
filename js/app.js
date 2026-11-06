@@ -376,7 +376,7 @@ function viewOrder() {
     html += section('Basket', { count: (b.items || []).length });
     html += `<div class="card flush"><ul class="list compact">` + (b.items || []).map(i => `<li><span class="grow"><span class="name">${esc(i.name)}${i.qty > 1 ? `<span class="qty">×${i.qty}</span>` : ''}</span>${i.offer ? `<span class="meta" style="color:var(--warm)">${esc(i.offer)}</span>` : ''}</span><span class="price">${money(i.total)}</span></li>`).join('') + `</ul>
       <div class="totals"><div class="row"><span>Items</span><span class="spacer"></span><span class="price">${money(b.subtotal)}</span></div>
-      ${b.savings ? `<div class="row"><span>Savings</span><span class="spacer"></span><span class="price" style="color:var(--accent)">−${money(b.savings)}</span></div>` : ''}
+      ${b.savings ? `<div class="row"><span>Savings</span><span class="spacer"></span><span class="price" style="color:var(--ok)">−${money(b.savings)}</span></div>` : ''}
       <div class="row"><span>Delivery</span><span class="spacer"></span><span class="price">${money(b.delivery)}</span></div>
       <div class="total"><span>Total</span><span class="price">${money(o.total)}</span></div>
       ${o.card ? `<p class="small muted" style="margin:8px 0 0">Paid with ${esc(o.card)} on delivery day. Substitutions off.</p>` : ''}</div></div>`;
@@ -515,7 +515,7 @@ function viewStaples() {
     html += `<div data-group="${status}">${section(title, { count: g.length })}<div class="card flush"><ul class="list">` + g.map(({ s }) => `<li data-name="${esc(s.name.toLowerCase())}"><span class="grow"><span class="name">${esc(s.name)}${(s.quantity || 1) > 1 ? `<span class="qty">×${s.quantity}</span>` : ''}</span>
       <span class="meta">${skipRule(s) === 'every_week' ? 'Every week' : s.every_days ? `About every ${s.every_days} days` : ''}${s.last_bought ? ` · last ${fmtDay(s.last_bought)}` : ''}${s.skips ? ` · left out ${s.skips}× running` : ''}</span>
       ${s.learned && s.skips >= 3 ? `<span class="meta" style="color:var(--warm)">${esc(s.learned)} · <button class="link" data-act="resetSkips" data-id="${s.id}">Undo</button></span>` : ''}
-      ${s.freqNote ? `<span class="meta" style="color:var(--accent)">${esc(s.freqNote)}</span>` : ''}
+      ${s.freqNote ? `<span class="meta" style="color:var(--ok)">${esc(s.freqNote)}</span>` : ''}
       ${s.times_bought ? `<details class="mini" data-toggle="hist-${s.id}"><summary>Bought ${s.times_bought}×${(s.history || []).length ? ', see when' : ''}</summary>${(s.history || []).length ? `<span class="meta">${[...s.history].reverse().map(x => `${fmtDay(x.date)}${x.qty > 1 ? ` ×${x.qty}` : ''}`).join(' · ')}</span>` : '<span class="meta">Dates are logged from your first order in the app.</span>'}</details>` : ''}</span>
       <input type="checkbox" class="switch" data-change="dropStaple" data-id="${s.id}" ${s.dropped ? '' : 'checked'} aria-label="${s.dropped ? 'Turn on' : 'Turn off'} ${esc(s.name)}"></li>`).join('') + `</ul></div></div>`;
   }
