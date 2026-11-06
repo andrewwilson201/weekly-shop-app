@@ -23,7 +23,8 @@ async function signIn(page, name, email) {
 }
 
 const browser = await chromium.launch();
-const phone = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 };
+// DARK=1 and WIDE=1 re-run the same flow in dark mode or at desktop width, for screenshots.
+const phone = { viewport: process.env.WIDE ? { width: 1280, height: 900 } : { width: 390, height: 844 }, deviceScaleFactor: 2, colorScheme: process.env.DARK ? 'dark' : 'light' };
 const a = await (await browser.newContext(phone)).newPage();
 const b = await (await browser.newContext(phone)).newPage();
 for (const p of [a, b]) { p.on('pageerror', e => console.log('PAGE ERROR', e.message)); p.on('console', m => m.type() === 'error' && console.log('CONSOLE', m.text())); }
