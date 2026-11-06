@@ -1,0 +1,36 @@
+name: Order worker
+
+# Every 5 minutes, look for an order someone started in the app and drive it
+# through Sainsbury's. GitHub can run scheduled jobs a few minutes late.
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: order-worker
+  cancel-in-progress: false
+
+jobs:
+  work:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SAINSBURYS_EMAIL: ${{ secrets.SAINSBURYS_EMAIL }}
+      SAINSBURYS_PASSWORD: ${{ secrets.SAINSBURYS_PASSWORD }}
+      WORKER_QUIET: '1'
+      WORKER_MINUTES: '110'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci --omit=dev
+        env: { PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' }
+      - id: check
+        run: node worker/run.mjs check
+      - if: steps.check.outputs.work == 'yes'
+        run: npx playwright install --with-deps chromium
+      - if: steps.check.outputs.work == 'yes'
+        run: xvfb-run -a node worker/run.mjs

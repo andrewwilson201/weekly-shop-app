@@ -1,3 +1,56 @@
 # Weekly Shop
 
-A shared weekly Sainsbury's shop app. See the first pull request.
+A phone app for planning the weekly Sainsbury's shop together: pick the week's meals, keep one shared shopping list, and send it all to Sainsbury's, with a final total to approve before anything is ordered.
+
+It's built the same way as [music-app](https://github.com/andrewwilson201/music-app): a static site (plain HTML, CSS and JavaScript, no build step) on GitHub Pages, with Firebase Auth and Firestore in the same Firebase project (`music-app-d0f3f`). The Sainsbury's part runs as a scheduled GitHub Actions job.
+
+## How it works
+
+- **Household**: the first person signs in with Google and makes a household. Settings › Share invite link sends a link; whoever opens it and signs in joins. Everything (meals, list, staples, orders) lives under `households/{id}` and only members can read or write it ([`firestore.rules`](firestore.rules)). Changes show up live on both phones.
+- **This week**: 10 meal ideas, favourites (most often picked) first, then ones you haven't had for a while. Either person taps to pick, and chooses a delivery day. Ideas are made each Sunday morning by the *Sunday meal ideas* workflow, or with the button in the app.
+- **List**: the shared shopping list. Type “olive oil x2” for two. Items that get ordered are removed afterwards; ones Sainsbury's didn't have stay.
+- **Shop**: staples that are due, ingredients for the picked meals, and the list, merged into one list. Untick anything you don't need.
+- **Recipe links**: paste a recipe's web address on Meals (or share the page to Weekly Shop from the phone's share menu, once the app is installed). Within a few minutes the worker reads the page's recipe data ([`worker/recipe.mjs`](worker/recipe.mjs), the schema.org Recipe most sites include), turns lines like “2 x 400g tins chopped tomatoes” into shop items, and saves it as a meal, picked for this week if you ticked that. Store-cupboard things (oil, salt, spices, stock) are marked “(cupboard)” and left out of the shop unless ticked.
+- **Meals**: the meal library. Each ingredient line is “item x2 | search words”; the search words pick the Sainsbury's product.
+- **Staples**: worked out from past orders (the rules from `build-staples.py`: every-week items always, others when due, skipped if not bought for a long time). Turn one off if you've stopped buying it. On the Shop screen they're in their own section with **Skip all staples**.
+- **Learning**: picks make meals favourites. A staple that's due but left out of an order counts as a skip: it's pushed back a cycle, and after 3 skips in a row it becomes a suggestion instead of being added (Staples › Undo reverses that). Buying it resets the count.
+- **Claude ideas**: with an `ANTHROPIC_API_KEY` secret, the Sunday ideas (and **Ask Claude for fresh ideas** on This week) come from Claude ([`worker/ideas-claude.mjs`](worker/ideas-claude.mjs)). It sees the meal library, the last 8 weeks of what was picked and what was passed over, the staples you've been leaving out, the time of year and Settings › Household notes (ages, dislikes, allergies). It mixes favourites with 3 or 4 new dishes, each with a one-line reason; new dishes come with a shop ingredient list and join the meal library (marked “New from Claude”). Picks already made are kept. Without the key, or if the call fails, the rule-based ideas are used. If Claude's safety check declines a request, the API retries on another model (`fallbacks: 'default'`).
+- **Holiday mode**: Settings › Holiday mode takes the dates you're away. Sunday ideas pause for weeks you're away for most of, and delivery days in that time can't be picked.
+
+## Ordering
+
+Tapping **Order from Sainsbury's** creates an order. The [order worker](worker/run.mjs) picks it up within about 5–10 minutes (GitHub's schedule) and then:
+
+1. logs in to Sainsbury's in a real browser window and waits for the **SMS code**, which either of you types into the app;
+2. lists free 1-hour slots on the chosen day and the day either side; you **pick a time** and it's booked;
+3. fills the basket (searching for anything without a product id) and shows the basket, anything not found, and the **total**;
+4. waits for someone to tap **Approve**, then presses Place order on Sainsbury's checkout with the saved card, checking the total hasn't changed;
+5. marks the staples as bought, counts the meals as picked, and clears the ordered list items.
+
+Cancel at any point releases the slot. If the bank asks for an extra payment check, or something unexpected happens while placing the order, the app says so and you finish in the Sainsbury's app. Substitutions are off on this account.
+
+Sainsbury's findings (Nov 2026): headless browsers get “Access Denied”, a visible browser (under `xvfb-run`) doesn't; login always needs an SMS code; slots, booking and the basket go through the site's own `/groceries-api/gol-services` API; checkout needs at least £25 of items. See [`worker/sainsburys.mjs`](worker/sainsburys.mjs). It's untested from GitHub's servers until the first real run.
+
+## One-time setup
+
+1. **GitHub Pages**: Settings › Pages › Deploy from a branch › `main` / root. The app is then at https://andrewwilson201.github.io/weekly-shop-app/ (already an authorised domain in Firebase, because the music app uses it).
+2. **Firestore rules**: paste [`firestore.rules`](firestore.rules) into Firebase console › Firestore Database › Rules › Publish. It contains the music app's rules too, because a Firebase project has one rule set; publishing either app's old file alone would break the other.
+3. **Secrets** (Settings › Secrets and variables › Actions):
+   - `FIREBASE_SERVICE_ACCOUNT`: the whole JSON from Firebase console › Project settings › Service accounts › Generate new private key.
+   - `SAINSBURYS_EMAIL` and `SAINSBURYS_PASSWORD`.
+   - `ANTHROPIC_API_KEY` (optional, for Claude ideas): an API key from console.anthropic.com. This is pay-as-you-go and separate from a Claude subscription; a week's ideas cost a few pence.
+4. **Data**: Settings › Import loads staples and meal history from a seed file made by `python3 tools/make-seed.py staples-plan.json meal-history.json shops/*/list.json > seed.json`. The seed holds purchase history, so it isn't committed (this repo is public, and so are its Actions logs, which is why the worker keeps order details out of them).
+
+## Run locally and test
+
+```sh
+npm install
+firebase emulators:start --only auth,firestore      # Firestore on 8081, Auth on 9099
+python3 -m http.server 8000                          # then open http://localhost:8000/?emulator
+npm test                                             # unit tests: due rule, skips, holiday weeks, shop merging, recipe parsing
+sh test/reset-emulators.sh && node test/e2e.mjs      # two people, a recipe link, pretend Claude ideas (CLAUDE_FAKE=1), a pretend shop (SAINSBURYS_FAKE=1), order to "placed"
+```
+
+With `?emulator` the sign-in page also offers a test email sign-in, because Google sign-in needs Google's servers.
+
+`vendor/firebase.js` is the Firebase SDK bundled from [`tools/firebase-entry.js`](tools/firebase-entry.js); the icons are made from `icon.svg` with `node tools/make-icons.cjs icon.svg icons`.
