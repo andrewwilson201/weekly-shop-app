@@ -6,7 +6,8 @@ const CACHE = 'weekly-shop-v3';
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
-    for (const key of await caches.keys()) if (key !== CACHE) await caches.delete(key);
+    // Only clear our own old caches: the music app shares this github.io origin.
+    for (const key of await caches.keys()) if (key.startsWith('weekly-shop-') && key !== CACHE) await caches.delete(key);
     await self.clients.claim();
   })());
 });
