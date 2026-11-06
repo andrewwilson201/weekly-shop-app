@@ -6,6 +6,7 @@ process.env.FIRESTORE_EMULATOR_HOST ||= 'localhost:8081';
 process.env.GCLOUD_PROJECT = 'weekly-shop-177b1';
 process.env.CLAUDE_FAKE = '1';
 process.env.ANTHROPIC_API_KEY = 'fake';
+process.env.WORKER_GITHUB_TOKEN = 'fake-token';
 const fns = await import('../functions/index.mjs');
 const { getFirestore, FieldValue } = await import('../functions/node_modules/firebase-admin/lib/firestore/index.js');
 const db = getFirestore();
@@ -39,5 +40,26 @@ assert((await week.get()).data().offered.length === d.offered.length, 'repeat de
 const imp = await h.collection('imports').add({ url: 'https://example.invalid/', state: 'requested', addToWeek: false });
 await fns.recipeLink.run({ data: await imp.get(), params: { hid: 'fn-test', iid: imp.id } });
 assert((await imp.get()).data().state === 'failed', 'recipe link handled');
+
+// A new order starts the GitHub worker at once (GitHub's API is stubbed here).
+const calls = [];
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (url, init) => { calls.push({ url, init }); return new Response(null, { status: 204 }); };
+const order = await h.collection('orders').add({ state: 'requested', week: '2026-11-01' });
+await fns.startOrder.run({ data: await order.get(), params: { hid: 'fn-test', oid: order.id } });
+assert(calls.length === 1 && calls[0].url.endsWith('/actions/workflows/order-worker.yml/dispatches') && JSON.parse(calls[0].init.body).ref === 'main', 'new order dispatches the order worker');
+assert((await order.get()).data().workerStartedAt, 'order marked as started');
+globalThis.fetch = async () => new Response('Bad credentials', { status: 401 });
+const order2 = await h.collection('orders').add({ state: 'requested', week: '2026-11-01' });
+await fns.startOrder.run({ data: await order2.get(), params: { hid: 'fn-test', oid: order2.id } });
+assert(/didn't start/.test((await order2.get()).data().message || ''), 'a failed dispatch is shown on the order');
+globalThis.fetch = realFetch;
+
+// Sunday: ideas made for a household without this week's ideas yet.
+const thisSunday = h.collection('weeks').doc((await import('../js/plan.js')).weekId(new Date()));
+await thisSunday.delete();
+await fns.sundayIdeas.run({});
+const sun = (await thisSunday.get()).data();
+assert(sun?.offered?.length >= 9 && sun.madeBy !== 'request', 'Sunday ideas made on schedule');
 console.log('Functions OK');
 process.exit(0);
