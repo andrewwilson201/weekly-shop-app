@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 120
     env:
       FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       SAINSBURYS_EMAIL: ${{ secrets.SAINSBURYS_EMAIL }}
       SAINSBURYS_PASSWORD: ${{ secrets.SAINSBURYS_PASSWORD }}
       WORKER_QUIET: '1'

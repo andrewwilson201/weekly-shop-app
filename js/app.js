@@ -145,8 +145,10 @@ function viewWeek() {
       <button class="btn primary" data-act="loadStarter">Load starter meals</button></div>`;
   }
   if (!w?.offered?.length) {
+    if (w?.ideasRequested) return html + `<div class="card"><p><b>Claude is choosing this week's ideas.</b> They'll appear here in a few minutes.</p></div>`;
     return html + `<div class="card"><p>This week's ideas haven't been made yet. They're made every Sunday morning, or you can make them now.</p>
-      <button class="btn primary" data-act="makeIdeas">Make 10 ideas</button></div>`;
+      <div class="row"><button class="btn primary" data-act="askClaude">Ask Claude for ideas</button><button class="btn" data-act="makeIdeas">Pick from our meals now</button></div>
+      <p class="small muted" style="margin-bottom:0">Claude learns from what you've picked before and suggests some new dishes. Without an API key set up, you get the usual picks instead.</p></div>`;
   }
   const picks = w.picks || {};
   const n = Object.keys(picks).length;
@@ -157,10 +159,12 @@ function viewWeek() {
     html += `<button class="meal${p ? ' on' : ''}" data-act="pick" data-id="${esc(id)}">
       <span class="num">${i + 1}</span>
       <span class="grow"><span class="title">${esc(m.name)}</span><br>
-      ${m.timesChosen ? `<span class="chip fav">Picked ${m.timesChosen}×</span>` : '<span class="chip">New</span>'}
+      ${w.reasons?.[id] ? `<span class="small muted">${esc(w.reasons[id])}</span><br>` : ''}
+      ${m.timesChosen ? `<span class="chip fav">Picked ${m.timesChosen}×</span>` : `<span class="chip">${m.addedBy?.name === 'Claude' ? 'New from Claude' : 'New'}</span>`}
       ${p ? `<span class="chip ok">${esc(p.name)}</span>` : ''}</span></button>`;
   });
-  html += `<div class="row"><button class="btn small" data-act="addIdea">Add another meal</button><button class="btn small" data-act="remakeIdeas">Swap the unpicked ones</button></div>`;
+  html += `<div class="row"><button class="btn small" data-act="addIdea">Add another meal</button><button class="btn small" data-act="remakeIdeas">Swap the unpicked ones</button>
+    <button class="btn small" data-act="askClaude" ${w.ideasRequested ? 'disabled' : ''}>${w.ideasRequested ? 'Claude is thinking…' : 'Ask Claude for fresh ideas'}</button></div>`;
 
   html += `<h2>Delivery day</h2><div class="days">`;
   for (let i = 1; i <= 7; i++) {
@@ -178,6 +182,8 @@ actions.loadStarter = () => run(async () => {
   const res = await fetch('data/recipes.json'); const { meals } = await res.json();
   await S.batchH(meals.map(m => ['add', ['meals'], { ...m, timesChosen: 0, createdAt: S.serverTimestamp() }]));
 }, 'Starter meals loaded');
+// The worker sees ideasRequested within a few minutes; picks made so far are kept.
+actions.askClaude = () => run(() => week() ? S.updateH(['weeks', thisWeekId()], { ideasRequested: true }) : S.setH(['weeks', thisWeekId()], { ideasRequested: true, offered: [], picks: {}, createdAt: S.serverTimestamp() }), 'Asked Claude. Ideas in a few minutes');
 actions.makeIdeas = () => run(() => S.setH(['weeks', thisWeekId()], { offered: pickIdeas(st.meals, { today: today() }), picks: {}, createdAt: S.serverTimestamp() }));
 actions.remakeIdeas = () => run(async () => {
   const w = week(); const keepIds = Object.keys(w.picks || {});
@@ -473,6 +479,10 @@ function viewSettings() {
       <div class="row" style="margin-top:10px"><button class="btn primary" data-act="share" data-id="${esc(link)}">Share invite link</button>
       <button class="btn small" data-act="newInvite">Make a new link</button></div>
       <p class="small muted">A new link stops the old one working. People already in stay in.</p></div>
+    <form class="card" data-form="saveNotes"><h2 style="margin-top:0">About your household</h2>
+      <p class="small muted">Claude reads this when it picks the week's ideas: who's eating, dislikes, allergies, how adventurous to be.</p>
+      <textarea name="notes" rows="4" data-keep="notes" placeholder="2 adults, children aged 5 and 7. Mild spice for the kids. No mushrooms.">${esc(h.notes || '')}</textarea>
+      <button class="btn small" style="margin-top:8px">Save</button></form>
     <div class="card"><h2 style="margin-top:0">Holiday mode</h2>
       <p class="small muted">Add the dates you're away. Sunday meal ideas pause for any week you're away for most of, and delivery days in that time can't be picked.</p>
       ${(h.away || []).filter(a => a.to >= today()).map((a, i) => `<div class="row" style="margin-bottom:8px"><span class="grow">${fmtDay(a.from, { weekday: 'short', day: 'numeric', month: 'short' })} – ${fmtDay(a.to, { weekday: 'short', day: 'numeric', month: 'short' })}</span><button class="btn small danger" data-act="delAway" data-id="${esc(a.from)}|${esc(a.to)}">Remove</button></div>`).join('')}
@@ -482,6 +492,7 @@ function viewSettings() {
       <input type="file" accept="application/json" data-change="importFile"></div>
     <div class="card"><p class="small muted">Signed in as ${esc(st.user.email)}</p><button class="btn" data-act="signOut">Sign out</button></div>`;
 }
+actions.saveNotes = f => { const notes = f.notes.value.trim().slice(0, 1000); delete keep.notes; run(() => S.updateH([], { notes }), 'Saved'); };
 actions.addAway = f => {
   const from = f.from.value, to = f.to.value;
   if (!from || !to || to < from) { toast('Pick a start date and an end date after it'); return; }

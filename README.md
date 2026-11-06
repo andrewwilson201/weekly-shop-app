@@ -14,6 +14,7 @@ It's built the same way as [music-app](https://github.com/andrewwilson201/music-
 - **Meals**: the meal library. Each ingredient line is “item x2 | search words”; the search words pick the Sainsbury's product.
 - **Staples**: worked out from past orders (the rules from `build-staples.py`: every-week items always, others when due, skipped if not bought for a long time). Turn one off if you've stopped buying it. On the Shop screen they're in their own section with **Skip all staples**.
 - **Learning**: picks make meals favourites. A staple that's due but left out of an order counts as a skip: it's pushed back a cycle, and after 3 skips in a row it becomes a suggestion instead of being added (Staples › Undo reverses that). Buying it resets the count.
+- **Claude ideas**: with an `ANTHROPIC_API_KEY` secret, the Sunday ideas (and **Ask Claude for fresh ideas** on This week) come from Claude ([`worker/ideas-claude.mjs`](worker/ideas-claude.mjs)). It sees the meal library, the last 8 weeks of what was picked and what was passed over, the staples you've been leaving out, the time of year and Settings › Household notes (ages, dislikes, allergies). It mixes favourites with 3 or 4 new dishes, each with a one-line reason; new dishes come with a shop ingredient list and join the meal library (marked “New from Claude”). Picks already made are kept. Without the key, or if the call fails, the rule-based ideas are used. If Claude's safety check declines a request, the API retries on another model (`fallbacks: 'default'`).
 - **Holiday mode**: Settings › Holiday mode takes the dates you're away. Sunday ideas pause for weeks you're away for most of, and delivery days in that time can't be picked.
 
 ## Ordering
@@ -37,6 +38,7 @@ Sainsbury's findings (Nov 2026): headless browsers get “Access Denied”, a vi
 3. **Secrets** (Settings › Secrets and variables › Actions):
    - `FIREBASE_SERVICE_ACCOUNT`: the whole JSON from Firebase console › Project settings › Service accounts › Generate new private key.
    - `SAINSBURYS_EMAIL` and `SAINSBURYS_PASSWORD`.
+   - `ANTHROPIC_API_KEY` (optional, for Claude ideas): an API key from console.anthropic.com. This is pay-as-you-go and separate from a Claude subscription; a week's ideas cost a few pence.
 4. **Data**: Settings › Import loads staples and meal history from a seed file made by `python3 tools/make-seed.py staples-plan.json meal-history.json shops/*/list.json > seed.json`. The seed holds purchase history, so it isn't committed (this repo is public, and so are its Actions logs, which is why the worker keeps order details out of them).
 
 ## Run locally and test
@@ -46,7 +48,7 @@ npm install
 firebase emulators:start --only auth,firestore      # Firestore on 8081, Auth on 9099
 python3 -m http.server 8000                          # then open http://localhost:8000/?emulator
 npm test                                             # unit tests: due rule, skips, holiday weeks, shop merging, recipe parsing
-sh test/reset-emulators.sh && node test/e2e.mjs      # two people, a recipe link, a pretend shop (SAINSBURYS_FAKE=1), order to "placed"
+sh test/reset-emulators.sh && node test/e2e.mjs      # two people, a recipe link, pretend Claude ideas (CLAUDE_FAKE=1), a pretend shop (SAINSBURYS_FAKE=1), order to "placed"
 ```
 
 With `?emulator` the sign-in page also offers a test email sign-in, because Google sign-in needs Google's servers.

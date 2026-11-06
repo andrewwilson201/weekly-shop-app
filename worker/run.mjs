@@ -15,6 +15,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 
 import { FakeSainsburys } from './fake.mjs';
 import { fetchRecipe } from './recipe.mjs';
+import { claudeIdeas } from './ideas-claude.mjs';
 
 // SAINSBURYS_FAKE=1 swaps in a pretend shop, for testing the app end to end.
 // The real one loads Playwright, so it's imported only when needed.
@@ -48,14 +49,54 @@ async function ideas() {
     const ref = h.ref.collection('weeks').doc(sunday);
     if ((await ref.get()).exists) continue;
     if (awayWeek(h.data().away, sunday)) { console.log(`Away for week ${sunday}, no ideas`); continue; }
-    const meals = (await h.ref.collection('meals').get()).docs.map(d => ({ id: d.id, ...d.data() }));
-    if (!meals.length) continue;
-    const offered = pickIdeas(meals, { today: iso(new Date()) });
-    await ref.set({ offered, picks: {}, createdAt: FieldValue.serverTimestamp(), madeBy: 'sunday' }, { merge: true });
-    const b = db.batch();
-    for (const id of offered) b.update(h.ref.collection('meals').doc(id), { lastOffered: sunday });
-    await b.commit();
-    console.log(`Made ${offered.length} ideas for week ${sunday}`);
+    await makeIdeas(h, sunday, 'sunday');
+  }
+}
+
+// Claude chooses when there's an API key; otherwise (or if it fails) the rules do.
+// keep: meal ids already picked this week, which stay in the list.
+async function makeIdeas(h, sunday, madeBy, keep = []) {
+  const meals = (await h.ref.collection('meals').get()).docs.map(d => ({ id: d.id, ...d.data() }));
+  if (!meals.length) return;
+  const ref = h.ref.collection('weeks').doc(sunday);
+  let offered = null, reasons = {}, by = 'rules';
+  try {
+    const weeks = (await h.ref.collection('weeks').orderBy('createdAt', 'desc').limit(8).get()).docs.map(d => ({ id: d.id, ...d.data() })).filter(w => w.id !== sunday);
+    const skipped = (await h.ref.collection('staples').where('skips', '>', 0).get()).docs.map(d => d.data().name);
+    const month = new Date().toLocaleDateString('en-GB', { month: 'long', timeZone: 'Europe/London' });
+    const ideas = await claudeIdeas({ meals, weeks, skippedStaples: skipped, notes: h.data().notes || '', season: `${month}, UK` });
+    if (ideas?.length >= 6) {
+      offered = [...keep];
+      const b = db.batch();
+      for (const i of ideas) {
+        let id = i.id;
+        if (i.meal) { const doc = h.ref.collection('meals').doc(); id = doc.id; b.set(doc, { ...i.meal, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: { name: 'Claude' } }); }
+        if (!offered.includes(id)) offered.push(id);
+        if (i.reason) reasons[id] = i.reason;
+      }
+      await b.commit();
+      offered = offered.slice(0, 10 + keep.length);
+      by = 'claude';
+    }
+  } catch (e) {
+    console.log(`Claude ideas failed, using the rules instead: ${e.message}`);
+  }
+  if (!offered) offered = [...keep, ...pickIdeas(meals.filter(m => !keep.includes(m.id)), { count: 10 - keep.length, today: iso(new Date()) })];
+  // A requested refresh keeps the week's picks (the kept meals stay in the list).
+  await ref.set({ offered, reasons, ...(madeBy === 'request' ? {} : { picks: {}, createdAt: FieldValue.serverTimestamp() }), madeBy, ideasBy: by, ideasRequested: FieldValue.delete() }, { merge: true });
+  const b = db.batch();
+  for (const id of offered) b.set(h.ref.collection('meals').doc(id), { lastOffered: sunday }, { merge: true });
+  await b.commit();
+  console.log(`Made ${offered.length} ideas for week ${sunday} (${by})`);
+}
+
+// "Ask Claude for ideas" in the app sets ideasRequested on the week.
+async function requestedIdeas() {
+  for (const h of await households()) {
+    const q = await h.ref.collection('weeks').where('ideasRequested', '==', true).get();
+    for (const w of q.docs) {
+      await makeIdeas(h, w.id, 'request', Object.keys(w.data().picks || {}));
+    }
   }
 }
 
@@ -283,12 +324,14 @@ async function main() {
     // Quick look before the workflow installs a browser.
     const n = (await waitingOrders()).length;
     console.log(n ? `${n} order(s) waiting` : 'No orders waiting');
-    // Recipe links don't need the browser, so do them straight away.
+    // Recipe links and idea requests don't need the browser, so do them straight away.
     for (const i of await waitingImports()) await processImport(i);
+    await requestedIdeas();
     if (process.env.GITHUB_OUTPUT) (await import('node:fs')).appendFileSync(process.env.GITHUB_OUTPUT, `work=${n ? 'yes' : 'no'}\n`);
     return;
   }
   for (const i of await waitingImports()) await processImport(i);
+  await requestedIdeas();
   if (!process.env.SAINSBURYS_EMAIL || !process.env.SAINSBURYS_PASSWORD) throw new Error('SAINSBURYS_EMAIL and SAINSBURYS_PASSWORD must be set');
   const waiting = await waitingOrders();
   if (!waiting.length) { console.log('No orders waiting'); return; }

@@ -37,8 +37,8 @@ assert(await a.isVisible('text=Set up your household'), 'new user sees household
 await a.click('text=Create household');
 await a.waitForSelector('text=Load starter meals');
 await a.click('text=Load starter meals');
-await a.waitForSelector('text=Make 10 ideas');
-await a.click('text=Make 10 ideas');
+await a.waitForSelector('text=Pick from our meals now');
+await a.click('text=Pick from our meals now');
 await a.waitForSelector('.meal');
 assert((await a.$$('.meal')).length === 10, '10 meal ideas offered');
 
@@ -103,6 +103,18 @@ await b.click('text=Check it');
 await b.waitForSelector('textarea[name=ingredients]');
 assert(/Olive oil \(cupboard\)/.test(await b.inputValue('textarea[name=ingredients]')), 'cupboard items marked');
 await b.screenshot({ path: `${SHOTS}/05c-imported-meal.png`, fullPage: true });
+
+// Claude ideas (CLAUDE_FAKE gives a canned answer, no API call); picks are kept
+await a.goto(`${BASE}#/week`); await a.waitForSelector('.meal');
+const picksBefore = (await a.$$('.meal.on')).length;
+await a.click('button:has-text("Ask Claude for fresh ideas")');
+await a.waitForSelector('text=Claude is thinking');
+await new Promise(r => spawn(process.execPath, ['worker/run.mjs', 'check'], { env: { ...env, CLAUDE_FAKE: '1' }, stdio: 'inherit' }).on('exit', r));
+await a.waitForSelector('text=Pretend new dish', { timeout: 15000 });
+assert(await a.isVisible('text=New from Claude'), 'new dish from Claude added to the ideas');
+assert(await a.isVisible('text=Because you liked'), 'Claude reasons shown');
+assert((await a.$$('.meal.on')).length === picksBefore, 'picks kept when Claude refreshes ideas');
+await a.screenshot({ path: `${SHOTS}/05d-claude-ideas.png`, fullPage: true });
 
 // The shop
 await a.goto(`${BASE}#/shop`);
