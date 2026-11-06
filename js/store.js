@@ -10,6 +10,7 @@
 //   households/{hid}/list/{id}      { text, qty, addedBy, addedAt, done }
 //   households/{hid}/staples/{id}   { product_uid, name, rule, quantity, every_days, last_bought, dropped }
 //   households/{hid}/imports/{id}   recipe link to read: { url, addToWeek, by, state: requested|done|failed, mealId, name, count, message }
+//   households/{hid}/devices/{id}  phones that get notifications: { token, uid, name, ua, createdAt }
 //   households/{hid}/orders/{id}    order run, driven by worker/run.mjs:
 //        { week, deliveryDate, state, requestedBy, lines[], smsCode, slots[], slotChoice, total, approvedBy, error, log[] }
 
@@ -17,9 +18,9 @@ import {
   initializeApp, getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult,
   signOut as fbSignOut, connectAuthEmulator, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
   doc, getDoc, setDoc, updateDoc, addDoc, deleteDoc, collection, query, orderBy, limit, onSnapshot, serverTimestamp,
-  arrayUnion, deleteField, writeBatch, connectFirestoreEmulator,
+  arrayUnion, deleteField, writeBatch, connectFirestoreEmulator, getMessaging, getToken, deleteToken, messagingSupported,
 } from '../vendor/firebase.js';
-import { FIREBASE_CONFIG } from './config.js';
+import { FIREBASE_CONFIG, VAPID_KEY } from './config.js';
 
 export const emulator = new URLSearchParams(location.search).has('emulator');
 const app = initializeApp(FIREBASE_CONFIG);
@@ -146,3 +147,30 @@ export async function batchH(ops) {
   }
 }
 export const me = () => ({ uid: state.user.uid, name: myName() });
+
+// ---------- phone notifications ----------
+// Web push through Firebase Cloud Messaging. Needs the service worker (sw.js),
+// so it works on the real site, not localhost; on iPhone only once the app is
+// on the home screen (iOS 16.4+). The worker sends them (worker/notify.mjs).
+const DEVICE_KEY = 'weeklyShopDevice';
+export function notificationsOn() {
+  try { return typeof Notification !== 'undefined' && Notification.permission === 'granted' && !!localStorage.getItem(DEVICE_KEY); } catch { return false; }
+}
+export async function notificationsSupported() {
+  return 'serviceWorker' in navigator && typeof Notification !== 'undefined' && await messagingSupported().catch(() => false);
+}
+export async function enableNotifications() {
+  if (!(await notificationsSupported())) throw new Error(/iPhone|iPad/.test(navigator.userAgent) ? 'On iPhone, add Weekly Shop to your home screen first (Share › Add to Home Screen), then turn this on from there.' : 'This browser can\'t show notifications.');
+  if (await Notification.requestPermission() !== 'granted') throw new Error('Notifications are blocked for this site. Allow them in the browser or phone settings, then try again.');
+  const reg = await navigator.serviceWorker.register('sw.js');
+  await navigator.serviceWorker.ready;
+  const token = await getToken(getMessaging(app), { vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
+  const id = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)))).slice(0, 16).map(b => b.toString(16).padStart(2, '0')).join('');
+  await setH(['devices', id], { token, uid: state.user.uid, name: state.user.displayName || '', ua: navigator.userAgent.slice(0, 200), createdAt: serverTimestamp() });
+  try { localStorage.setItem(DEVICE_KEY, id); } catch {}
+}
+export async function disableNotifications() {
+  let id = null; try { id = localStorage.getItem(DEVICE_KEY); localStorage.removeItem(DEVICE_KEY); } catch {}
+  if (id) await deleteH(['devices', id]).catch(() => {});
+  await deleteToken(getMessaging(app)).catch(() => {});
+}

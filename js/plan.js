@@ -101,3 +101,22 @@ export function buildShop({ staples = [], meals = [], list = [], delivery, extra
   }
   return lines;
 }
+
+// After an order: what to record on a staple that was bought on `delivery`.
+// Keeps a log of the last 30 purchases and re-learns how often it's bought:
+// the gap since the last purchase moves the estimate 30% of the way, so one
+// odd week doesn't swing it, but a real change shows within a few orders.
+export function learnStaple(s, delivery, qty = 1) {
+  const history = [...(s.history || []), { date: delivery, qty }].slice(-30);
+  const update = { last_bought: delivery, times_bought: (s.times_bought || 0) + 1, history, skips: 0 };
+  if (s.last_bought && s.last_bought < delivery && s.rule !== 'every_week') {
+    const gap = daysBetween(s.last_bought, delivery);
+    if (gap >= 3 && gap <= 180) {
+      const was = s.every_days || gap;
+      const now = Math.max(5, Math.round(0.7 * was + 0.3 * gap));
+      update.every_days = now;
+      if (Math.abs(now - was) >= 2) update.freqNote = `Now about every ${now} days (was ${was}), from your recent orders`;
+    }
+  }
+  return update;
+}

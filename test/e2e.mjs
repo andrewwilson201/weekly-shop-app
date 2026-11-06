@@ -162,6 +162,7 @@ assert(await a.isVisible('text=Ordered'), 'week shows as ordered');
 await a.screenshot({ path: `${SHOTS}/11-week-after.png`, fullPage: true });
 await a.goto(`${BASE}#/staples`); await sleep(800);
 assert(await a.isVisible(`li:has-text("${firstStaple.replace(/"/g, '')}") >> text=left out 1× running`), 'unticked staple counted as a skip');
+assert(await a.isVisible('summary:has-text("see when")'), 'bought staples log the purchase date');
 
 // Holiday mode
 await a.goto(`${BASE}#/settings`);

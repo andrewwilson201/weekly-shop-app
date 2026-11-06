@@ -46,3 +46,28 @@ test('holiday mode', () => {
   assert.equal(awayWeek(away, '2026-12-13'), false);  // only Sat 19? none
   assert.equal(awayWeek(away, '2026-12-27'), false);  // 27, 28, 29 = 3 days
 });
+
+test('Claude ideas: no more than 2 of one protein, vegetarian 3', async () => {
+  const { validate } = await import('../worker/ideas-claude.mjs');
+  const byId = new Map(['a', 'b', 'c', 'd', 'e', 'f'].map(id => [id, { id, name: id }]));
+  const ideas = [
+    { existing_id: 'a', protein: 'chicken' }, { existing_id: 'b', protein: 'chicken' }, { existing_id: 'c', protein: 'chicken' },
+    { existing_id: 'd', protein: 'vegan' }, { existing_id: 'e', protein: 'vegetarian' }, { existing_id: 'f', protein: 'vegetarian' },
+    { existing_id: '', name: 'Veg chilli', protein: 'vegetarian', ingredients: [{ item: 'Beans', qty: 1 }] },
+    { existing_id: '', name: 'A', protein: 'chicken', ingredients: [{ item: 'x', qty: 1 }] },
+  ];
+  const out = validate(ideas, byId);
+  assert.deepEqual(out.map(o => o.id || o.meal.name), ['a', 'b', 'd', 'e', 'f']);
+});
+
+test('staples re-learn how often they are bought and log each purchase', async () => {
+  const { learnStaple } = await import('../js/plan.js');
+  const s = { rule: 'when_due', every_days: 14, last_bought: '2026-10-01', times_bought: 5 };
+  const u = learnStaple(s, '2026-11-05', 2); // 35 days later: bought less often now
+  assert.equal(u.every_days, Math.round(0.7 * 14 + 0.3 * 35));
+  assert.equal(u.times_bought, 6);
+  assert.deepEqual(u.history, [{ date: '2026-11-05', qty: 2 }]);
+  assert.match(u.freqNote, /every 20 days/);
+  const weekly = learnStaple({ rule: 'every_week', every_days: 7, last_bought: '2026-10-01' }, '2026-11-05');
+  assert.equal(weekly.every_days, undefined);
+});

@@ -54,6 +54,8 @@ async function makeIdeasInner(h, sunday, madeBy, keep) {
         if (i.reason) reasons[id] = i.reason;
       }
       await b.commit();
+      // Any the variety check dropped are topped up from the usual picks.
+      if (offered.length < 10 + keep.length) offered.push(...pickIdeas(meals.filter(m => !offered.includes(m.id)), { count: 10 + keep.length - offered.length, today: iso(new Date()) }));
       offered = offered.slice(0, 10 + keep.length);
       by = 'claude';
     }
