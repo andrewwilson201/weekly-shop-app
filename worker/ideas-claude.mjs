@@ -113,3 +113,32 @@ function fakeIdeas(meals) {
     ingredients: [{ item: 'Orzo', qty: 1, search: 'sainsburys orzo', pantry: false }, { item: 'Chicken thighs', qty: 1, search: 'sainsburys chicken thighs', pantry: false }, { item: 'Olive oil', qty: 1, search: 'olive oil', pantry: true }] });
   return validate(ideas, byId);
 }
+
+// Shop ingredient lists for meals that have none, e.g. meals from the order
+// history or typed in by name. Returns { mealId: [ingredients] }, or null with no key.
+const ING_ITEM = SCHEMA.properties.ideas.items.properties.ingredients.items;
+const ING_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['meals'],
+  properties: { meals: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'ingredients'],
+    properties: { id: { type: 'string' }, ingredients: { type: 'array', items: ING_ITEM } } } } },
+};
+
+export async function claudeIngredients(meals, notes = '') {
+  if (!meals.length) return {};
+  if (process.env.CLAUDE_FAKE) return Object.fromEntries(meals.map(m => [m.id, [{ item: `Pretend ingredient for ${m.name}`, qty: 1, search: 'sainsburys pasta' }]]));
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const response = await new Anthropic().beta.messages.create({
+    model: MODEL,
+    max_tokens: 16000,
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: ING_SCHEMA } },
+    system: `You write shopping lists for a family's online Sainsbury's shop. For each dinner, list what to buy to cook it once for the whole household, as Sainsbury's shop items. Include every component in the dish's name (sides too). Mark store-cupboard basics (oil, salt, pepper, dried spices, stock cubes, flour) as pantry. Respect any household notes.`,
+    messages: [{ role: 'user', content: `Household notes: ${notes || 'none given'}\n\nDinners (JSON):\n${JSON.stringify(meals)}\n\nReturn an ingredients list for every id.` }],
+  });
+  if (response.stop_reason === 'refusal' || response.stop_reason === 'max_tokens') throw new Error(`Claude stopped: ${response.stop_reason}`);
+  const out = JSON.parse(response.content.filter(b => b.type === 'text').map(b => b.text).join(''));
+  const ids = new Set(meals.map(m => m.id));
+  return Object.fromEntries((out.meals || []).filter(m => ids.has(m.id)).map(m => [m.id,
+    (m.ingredients || []).filter(g => g.item).map(g => ({ item: g.item, qty: Math.max(1, g.qty || 1), search: g.search || g.item, ...(g.pantry ? { pantry: true } : {}) }))]));
+}

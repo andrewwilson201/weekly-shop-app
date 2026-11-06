@@ -14,8 +14,7 @@ import { initializeApp, cert, applicationDefault } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 
 import { FakeSainsburys } from './fake.mjs';
-import { fetchRecipe } from './recipe.mjs';
-import { claudeIdeas } from './ideas-claude.mjs';
+import { makeJobs } from './jobs.mjs';
 
 // SAINSBURYS_FAKE=1 swaps in a pretend shop, for testing the app end to end.
 // The real one loads Playwright, so it's imported only when needed.
@@ -31,6 +30,7 @@ const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
 initializeApp(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: process.env.GCLOUD_PROJECT || 'weekly-shop-177b1' }
   : { credential: sa ? cert(JSON.parse(sa)) : applicationDefault() });
 const db = getFirestore();
+const { makeIdeas, processImport, claimImport, claimIdeas, fillIngredients } = makeJobs(db);
 
 const DEADLINE = Date.now() + (Number(process.env.WORKER_MINUTES) || 50) * 60000;
 const ACTIVE = ['requested', 'logging_in', 'need_code', 'choose_slot', 'filling', 'review', 'placing'];
@@ -53,49 +53,13 @@ async function ideas() {
   }
 }
 
-// Claude chooses when there's an API key; otherwise (or if it fails) the rules do.
-// keep: meal ids already picked this week, which stay in the list.
-async function makeIdeas(h, sunday, madeBy, keep = []) {
-  const meals = (await h.ref.collection('meals').get()).docs.map(d => ({ id: d.id, ...d.data() }));
-  if (!meals.length) return;
-  const ref = h.ref.collection('weeks').doc(sunday);
-  let offered = null, reasons = {}, by = 'rules';
-  try {
-    const weeks = (await h.ref.collection('weeks').orderBy('createdAt', 'desc').limit(8).get()).docs.map(d => ({ id: d.id, ...d.data() })).filter(w => w.id !== sunday);
-    const skipped = (await h.ref.collection('staples').where('skips', '>', 0).get()).docs.map(d => d.data().name);
-    const month = new Date().toLocaleDateString('en-GB', { month: 'long', timeZone: 'Europe/London' });
-    const ideas = await claudeIdeas({ meals, weeks, skippedStaples: skipped, notes: h.data().notes || '', season: `${month}, UK` });
-    if (ideas?.length >= 6) {
-      offered = [...keep];
-      const b = db.batch();
-      for (const i of ideas) {
-        let id = i.id;
-        if (i.meal) { const doc = h.ref.collection('meals').doc(); id = doc.id; b.set(doc, { ...i.meal, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: { name: 'Claude' } }); }
-        if (!offered.includes(id)) offered.push(id);
-        if (i.reason) reasons[id] = i.reason;
-      }
-      await b.commit();
-      offered = offered.slice(0, 10 + keep.length);
-      by = 'claude';
-    }
-  } catch (e) {
-    console.log(`Claude ideas failed, using the rules instead: ${e.message}`);
-  }
-  if (!offered) offered = [...keep, ...pickIdeas(meals.filter(m => !keep.includes(m.id)), { count: 10 - keep.length, today: iso(new Date()) })];
-  // A requested refresh keeps the week's picks (the kept meals stay in the list).
-  await ref.set({ offered, reasons, ...(madeBy === 'request' ? {} : { picks: {}, createdAt: FieldValue.serverTimestamp() }), madeBy, ideasBy: by, ideasRequested: FieldValue.delete() }, { merge: true });
-  const b = db.batch();
-  for (const id of offered) b.set(h.ref.collection('meals').doc(id), { lastOffered: sunday }, { merge: true });
-  await b.commit();
-  console.log(`Made ${offered.length} ideas for week ${sunday} (${by})`);
-}
 
 // "Ask Claude for ideas" in the app sets ideasRequested on the week.
 async function requestedIdeas() {
   for (const h of await households()) {
     const q = await h.ref.collection('weeks').where('ideasRequested', '==', true).get();
     for (const w of q.docs) {
-      await makeIdeas(h, w.id, 'request', Object.keys(w.data().picks || {}));
+      if (await claimIdeas(w.ref)) await makeIdeas(h, w.id, 'request', Object.keys(w.data().picks || {}));
     }
   }
 }
@@ -120,34 +84,6 @@ async function waitingImports() {
   return out;
 }
 
-// Reads the recipe at the link and saves it as a meal. If asked, also adds it
-// to this week's ideas and picks it for whoever shared the link.
-async function processImport({ h, ref, data }) {
-  try {
-    const r = await (process.env.RECIPE_FAKE ? fakeRecipe(data.url) : fetchRecipe(data.url));
-    const meal = h.ref.collection('meals').doc();
-    await meal.set({ name: r.name || 'Recipe from a link', ingredients: r.ingredients, source: data.url, image: r.image || null, servings: r.servings || null, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: data.by || null });
-    if (data.addToWeek) {
-      const week = h.ref.collection('weeks').doc(weekId(new Date()));
-      const update = { offered: FieldValue.arrayUnion(meal.id), createdAt: FieldValue.serverTimestamp() };
-      if (data.by?.uid) update.picks = { [meal.id]: data.by };
-      // Keep an existing week's createdAt.
-      if ((await week.get()).exists) delete update.createdAt;
-      await week.set(update, { merge: true });
-    }
-    await ref.update({ state: 'done', mealId: meal.id, name: r.name, count: r.ingredients.length, doneAt: FieldValue.serverTimestamp() });
-    console.log(`Imported a recipe (${r.ingredients.length} ingredients)`);
-  } catch (e) {
-    await ref.update({ state: 'failed', message: e.message || String(e) });
-    console.log(`Recipe import failed: ${e.message}`);
-  }
-}
-async function fakeRecipe(url) {
-  const { extractRecipe, parseIngredient } = await import('./recipe.mjs');
-  const html = (await import('node:fs')).readFileSync(new URL('../test/fixtures/recipe.html', import.meta.url), 'utf8');
-  const r = extractRecipe(html, url);
-  return { ...r, ingredients: r.ingredients.map(parseIngredient) };
-}
 
 async function processOrder({ h, ref }) {
   const logLines = [];
@@ -325,12 +261,13 @@ async function main() {
     const n = (await waitingOrders()).length;
     console.log(n ? `${n} order(s) waiting` : 'No orders waiting');
     // Recipe links and idea requests don't need the browser, so do them straight away.
-    for (const i of await waitingImports()) await processImport(i);
+    for (const i of await waitingImports()) if (await claimImport(i.ref)) await processImport(i);
     await requestedIdeas();
+    for (const h of await households()) await fillIngredients(h);
     if (process.env.GITHUB_OUTPUT) (await import('node:fs')).appendFileSync(process.env.GITHUB_OUTPUT, `work=${n ? 'yes' : 'no'}\n`);
     return;
   }
-  for (const i of await waitingImports()) await processImport(i);
+  for (const i of await waitingImports()) if (await claimImport(i.ref)) await processImport(i);
   await requestedIdeas();
   if (!process.env.SAINSBURYS_EMAIL || !process.env.SAINSBURYS_PASSWORD) throw new Error('SAINSBURYS_EMAIL and SAINSBURYS_PASSWORD must be set');
   const waiting = await waitingOrders();

@@ -145,7 +145,7 @@ function viewWeek() {
       <button class="btn primary" data-act="loadStarter">Load starter meals</button></div>`;
   }
   if (!w?.offered?.length) {
-    if (w?.ideasRequested) return html + `<div class="card"><p><b>Claude is choosing this week's ideas.</b> They'll appear here in a few minutes.</p></div>`;
+    if (w?.ideasRequested) return html + `<div class="card"><p><b>Claude is choosing this week's ideas.</b> They'll appear here in a minute or two.</p></div>`;
     return html + `<div class="card"><p>This week's ideas haven't been made yet. They're made every Sunday morning, or you can make them now.</p>
       <div class="row"><button class="btn primary" data-act="askClaude">Ask Claude for ideas</button><button class="btn" data-act="makeIdeas">Pick from our meals now</button></div>
       <p class="small muted" style="margin-bottom:0">Claude learns from what you've picked before and suggests some new dishes. Without an API key set up, you get the usual picks instead.</p></div>`;
@@ -182,8 +182,8 @@ actions.loadStarter = () => run(async () => {
   const res = await fetch('data/recipes.json'); const { meals } = await res.json();
   await S.batchH(meals.map(m => ['add', ['meals'], { ...m, timesChosen: 0, createdAt: S.serverTimestamp() }]));
 }, 'Starter meals loaded');
-// The worker sees ideasRequested within a few minutes; picks made so far are kept.
-actions.askClaude = () => run(() => week() ? S.updateH(['weeks', thisWeekId()], { ideasRequested: true }) : S.setH(['weeks', thisWeekId()], { ideasRequested: true, offered: [], picks: {}, createdAt: S.serverTimestamp() }), 'Asked Claude. Ideas in a few minutes');
+// The askClaude function (or the worker, as a backup) sees ideasRequested; picks made so far are kept.
+actions.askClaude = () => run(() => week() ? S.updateH(['weeks', thisWeekId()], { ideasRequested: true }) : S.setH(['weeks', thisWeekId()], { ideasRequested: true, offered: [], picks: {}, createdAt: S.serverTimestamp() }), 'Asked Claude. Ideas in a minute or two');
 actions.makeIdeas = () => run(() => S.setH(['weeks', thisWeekId()], { offered: pickIdeas(st.meals, { today: today() }), picks: {}, createdAt: S.serverTimestamp() }));
 actions.remakeIdeas = () => run(async () => {
   const w = week(); const keepIds = Object.keys(w.picks || {});
@@ -374,12 +374,12 @@ function viewMeals() {
       <input type="url" name="url" data-keep="importUrl" placeholder="https://www.bbcgoodfood.com/recipes/…" inputmode="url" autocomplete="off" required></label>
       <label class="row small"><input type="checkbox" name="week" class="check" checked> Pick it for this week</label>
       <button class="btn primary block" style="margin-top:10px">Add recipe</button>
-      <p class="small muted" style="margin:8px 0 0">Or share a recipe page to Weekly Shop from your phone's share menu. It takes a few minutes to read.</p></form>
+      <p class="small muted" style="margin:8px 0 0">Or share a recipe page to Weekly Shop from your phone's share menu. It takes a moment to read.</p></form>
     ${importsHtml()}
     <div class="row"><a class="btn" href="#/meal/new">Type in a meal</a>${st.meals.length ? '' : '<button class="btn" data-act="loadStarter">Load starter meals</button>'}</div>`;
   const inWeek = new Set(week()?.offered || []);
   html += `<ul class="list card" style="margin-top:12px">` + meals.map(m => `<li><a href="#/meal/${m.id}" class="grow" style="text-decoration:none">
-      <span class="name">${esc(m.name)}</span><br><span class="meta">${(m.ingredients || []).length} ingredients${m.timesChosen ? ` · picked ${m.timesChosen}×` : ''}${m.lastChosen ? `, last ${fmtDay(m.lastChosen)}` : ''}</span></a>
+      <span class="name">${esc(m.name)}</span><br><span class="meta">${(m.ingredients || []).length} ingredients${m.ingredientsBy === 'claude' ? ' (from Claude)' : ''}${m.timesChosen ? ` · picked ${m.timesChosen}×` : ''}${m.lastChosen ? `, last ${fmtDay(m.lastChosen)}` : ''}</span></a>
       ${week() && !inWeek.has(m.id) ? `<button class="btn small" data-act="offer" data-id="${m.id}">Add to this week</button>` : inWeek.has(m.id) ? '<span class="pill">In this week\'s ideas</span>' : ''}</li>`).join('') + `</ul>`;
   const archived = st.meals.filter(m => m.archived);
   if (archived.length) html += `<details class="card soft"><summary>Removed meals (${archived.length})</summary><ul class="list">${archived.map(m => `<li><span class="grow">${esc(m.name)}</span><button class="btn small" data-act="unarchive" data-id="${m.id}">Restore</button></li>`).join('')}</ul></details>`;
@@ -389,7 +389,7 @@ function importsHtml() {
   const recent = st.imports.filter(i => i.state !== 'done' || (i.doneAt && Date.now() - i.doneAt.toMillis() < 864e5)).slice(0, 5);
   if (!recent.length) return '';
   return `<ul class="list card">` + recent.map(i => `<li><span class="grow"><span class="name">${esc(i.name || i.url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 60))}</span><br>
-    <span class="meta">${i.state === 'requested' ? 'Reading the recipe, usually within 10 minutes…' : i.state === 'failed' ? esc(i.message || 'Couldn\'t read it') : `${i.count} ingredients added${i.addToWeek ? ', picked for this week' : ''}`}</span></span>
+    <span class="meta">${i.state === 'requested' || i.state === 'reading' ? 'Reading the recipe…' : i.state === 'failed' ? esc(i.message || 'Couldn\'t read it') : `${i.count} ingredients added${i.addToWeek ? ', picked for this week' : ''}`}</span></span>
     ${i.state === 'done' && i.mealId ? `<a class="btn small" href="#/meal/${i.mealId}">Check it</a>` : ''}
     ${i.state !== 'requested' ? `<button class="iconbtn" data-act="dismissImport" data-id="${i.id}" aria-label="Dismiss"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>` : ''}</li>`).join('') + `</ul>`;
 }
@@ -398,7 +398,7 @@ async function importLink(url, addToWeek = true) {
   if (!/^https?:\/\//i.test(url)) throw new Error('That doesn\'t look like a web link');
   await S.addH(['imports'], { url, addToWeek, by: S.me(), state: 'requested', createdAt: S.serverTimestamp() });
 }
-actions.importLink = f => { const url = f.url.value; const wk = f.week.checked; keep.importUrl = ''; run(() => importLink(url, wk), 'Got it. It\'ll appear in a few minutes'); };
+actions.importLink = f => { const url = f.url.value; const wk = f.week.checked; keep.importUrl = ''; run(() => importLink(url, wk), 'Got it. It\'ll appear in a moment'); };
 actions.dismissImport = el => run(() => S.deleteH(['imports', el.dataset.id]));
 // Links shared to the app (Web Share Target in manifest.json): ?url=…&text=…&title=…
 let sharedLink = (() => {
@@ -411,7 +411,7 @@ let sharedLink = (() => {
 function takeSharedLink() {
   if (!sharedLink || !st.household?.members) return;
   const url = sharedLink; sharedLink = null;
-  run(() => importLink(url, true), 'Recipe link added. It\'ll appear in a few minutes');
+  run(() => importLink(url, true), 'Recipe link added. It\'ll appear in a moment');
 }
 
 actions.offer = el => run(() => S.setH(['weeks', thisWeekId()], { offered: [...(week().offered || []), el.dataset.id] }), 'Added to this week');
