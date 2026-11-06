@@ -1,0 +1,248 @@
+// Order worker. Looks for orders the app has requested and drives them
+// through Sainsbury's, talking to the app through the order document:
+//
+//   requested → logging_in → need_code (app writes smsCode) → choose_slot (app writes slotChoice)
+//   → filling → review (app writes approvedBy) → placing → placed
+//   any step → failed | cancelled (app writes cancelRequested) | needs_you
+//
+// Usage:  xvfb-run -a node worker/run.mjs            process waiting orders, then exit
+//         node worker/run.mjs ideas                  make this week's 10 meal ideas if missing
+// Env:    FIREBASE_SERVICE_ACCOUNT (JSON) or GOOGLE_APPLICATION_CREDENTIALS,
+//         SAINSBURYS_EMAIL, SAINSBURYS_PASSWORD, WORKER_MINUTES (default 50)
+
+import { initializeApp, cert, applicationDefault } from 'firebase-admin/app';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+
+import { FakeSainsburys } from './fake.mjs';
+
+// SAINSBURYS_FAKE=1 swaps in a pretend shop, for testing the app end to end.
+// The real one loads Playwright, so it's imported only when needed.
+const Sainsburys = process.env.SAINSBURYS_FAKE ? FakeSainsburys : null;
+async function makeShop(opts) {
+  if (Sainsburys) return new Sainsburys(opts);
+  const { Sainsburys: Real } = await import('./sainsburys.mjs');
+  return new Real(opts);
+}
+import { pickIdeas, weekId, iso, daysBetween } from '../js/plan.js';
+
+const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
+initializeApp(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: process.env.GCLOUD_PROJECT || 'music-app-d0f3f' }
+  : { credential: sa ? cert(JSON.parse(sa)) : applicationDefault() });
+const db = getFirestore();
+
+const DEADLINE = Date.now() + (Number(process.env.WORKER_MINUTES) || 50) * 60000;
+const ACTIVE = ['requested', 'logging_in', 'need_code', 'choose_slot', 'filling', 'review', 'placing'];
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+class Cancelled extends Error {}
+
+async function households() {
+  return (await db.collection('households').get()).docs;
+}
+
+// ---------- Sunday ideas ----------
+async function ideas() {
+  const sunday = weekId(new Date());
+  for (const h of await households()) {
+    const ref = h.ref.collection('weeks').doc(sunday);
+    if ((await ref.get()).exists) continue;
+    const meals = (await h.ref.collection('meals').get()).docs.map(d => ({ id: d.id, ...d.data() }));
+    if (!meals.length) continue;
+    const offered = pickIdeas(meals, { today: iso(new Date()) });
+    await ref.set({ offered, picks: {}, createdAt: FieldValue.serverTimestamp(), madeBy: 'sunday' }, { merge: true });
+    const b = db.batch();
+    for (const id of offered) b.update(h.ref.collection('meals').doc(id), { lastOffered: sunday });
+    await b.commit();
+    console.log(`Made ${offered.length} ideas for week ${sunday}`);
+  }
+}
+
+// ---------- orders ----------
+async function waitingOrders() {
+  const out = [];
+  for (const h of await households()) {
+    const q = await h.ref.collection('orders').where('state', 'in', ACTIVE).get();
+    out.push(...q.docs.map(d => ({ h, ref: d.ref, data: d.data() })));
+  }
+  return out;
+}
+
+async function processOrder({ h, ref }) {
+  const logLines = [];
+  const update = async (data) => { await ref.update(data); };
+  const log = async (msg) => {
+    const line = `${new Date().toLocaleTimeString('en-GB', { timeZone: 'Europe/London' })} ${msg}`;
+    // The repo is public, so Actions logs are too: keep details in the order doc only.
+    if (!process.env.WORKER_QUIET) console.log(line);
+    logLines.push(line);
+    await ref.update({ log: FieldValue.arrayUnion(line) }).catch(() => {});
+  };
+  const read = async () => (await ref.get()).data();
+  // Wait for the app to write a field; checks for cancel and the deadline.
+  const waitFor = async (pick, minutes) => {
+    const until = Math.min(DEADLINE, Date.now() + minutes * 60000);
+    while (Date.now() < until) {
+      const d = await read();
+      if (d.cancelRequested) throw new Cancelled();
+      const v = pick(d);
+      if (v) return v;
+      await sleep(3000);
+    }
+    return null;
+  };
+
+  const order = await read();
+  // Claim it so a second worker run doesn't pick it up too.
+  const claimed = await db.runTransaction(async t => {
+    const d = (await t.get(ref)).data();
+    if (d.state !== 'requested' && d.workerAt && Date.now() - d.workerAt.toMillis() < 5 * 60000) return false;
+    // A run that died part way and was left for hours: don't restart it out of the blue.
+    if (d.state !== 'requested' && (!d.workerAt || Date.now() - d.workerAt.toMillis() > 3 * 3600000)) {
+      t.update(ref, { state: 'failed', message: 'The order helper stopped part way. Check the Sainsbury\'s app, then start again.' });
+      return false;
+    }
+    t.update(ref, { state: 'logging_in', workerAt: FieldValue.serverTimestamp(), message: FieldValue.delete() });
+    return true;
+  });
+  if (!claimed) return;
+  const heartbeat = setInterval(() => ref.update({ workerAt: FieldValue.serverTimestamp() }).catch(() => {}), 60000);
+
+  const shop = await makeShop({ store: h.data().store || '0031', log: m => log(m) });
+  let reserved = false;
+  try {
+    if (order.cancelRequested) throw new Cancelled();
+    await shop.open();
+    await log('Logging in to Sainsbury\'s');
+    await shop.login(process.env.SAINSBURYS_EMAIL, process.env.SAINSBURYS_PASSWORD, async () => {
+      await update({ state: 'need_code', smsCode: FieldValue.delete() });
+      const code = await waitFor(d => d.smsCode, 10);
+      if (!code) throw new Error('No SMS code came in within 10 minutes.');
+      await update({ smsCode: FieldValue.delete(), state: 'logging_in' });
+      return code;
+    });
+
+    // Slots: the chosen day and the day either side.
+    const all = await shop.slots([1, 2, 3]);
+    const day = order.deliveryDate;
+    const near = all.filter(s => Math.abs(daysBetween(day, s.start_time.slice(0, 10))) <= 1)
+      .map(s => ({ start_time: s.start_time, end_time: s.end_time, price: s.price, is_green: !!s.is_green, date: londonDate(s.start_time), booking_key: s.booking_key }));
+    await update({ state: 'choose_slot', slots: near.map(({ booking_key, ...s }) => s), slotChoice: FieldValue.delete() });
+    await log(`${near.length} free slots around ${day}`);
+    const choice = await waitFor(d => d.slotChoice, 30);
+    if (!choice) throw new Error('No delivery time was picked within 30 minutes.');
+    let slot = near.find(s => s.start_time === choice);
+    if (!slot) throw new Error('That slot has gone. Start the order again.');
+    // Keys can go stale: refresh before booking.
+    slot = (await shop.slots([1, 2, 3])).find(s => s.start_time === choice) || slot;
+    const res = await shop.reserve(slot);
+    reserved = true;
+    await update({ state: 'filling', slot: { start_time: res.slot.start_time, end_time: res.slot.end_time, reserved_until: res.reserved_until } });
+    await log(`Booked ${choice}`);
+
+    // Basket
+    const slotDate = res.slot.start_time.slice(0, 10);
+    const before = await shop.basket();
+    if (before?.items?.length) await log(`The basket already had ${before.items.length} items; they're kept`);
+    const lines = (await read()).lines || [];
+    for (const line of lines) {
+      try {
+        let uid = line.uid;
+        if (!uid) {
+          const hits = (await shop.search(line.search || line.name)).filter(p => p.available);
+          if (!hits.length) { line.result = 'not_found'; continue; }
+          uid = hits[0].uid; line.uid = uid; line.product = hits[0].name;
+        }
+        await shop.add(uid, line.qty || 1, slotDate);
+        line.result = 'added';
+      } catch (e) {
+        line.result = e.status === 400 ? 'unavailable' : `error ${e.status || e.message}`;
+      }
+    }
+    const b = await shop.basket(slotDate);
+    const items = (b.items || []).map(i => ({ uid: i.product?.sku, name: i.product?.name, qty: i.quantity, total: Number(i.subtotal_price), offer: (i.promotions || [])[0]?.strap_line || '' }));
+    const basket = { items, subtotal: Number(b.subtotal_price), savings: Number(b.savings || 0), delivery: Number(b.slot_price ?? (b.total_price - b.subtotal_price)), minimum: b.minimum_spend };
+    const total = Number(b.total_price);
+    const added = lines.filter(l => l.result === 'added').length;
+    await log(`Added ${added} of ${lines.length} lines, total £${total.toFixed(2)}`);
+    if (b.has_exceeded_minimum_spend === false) {
+      await update({ state: 'needs_you', lines, basket, total, message: `The basket is under Sainsbury's £${b.minimum_spend} minimum, so it can't be ordered yet. Add more in the Sainsbury's app, or cancel.` });
+      reserved = false; // leave the slot for them to use
+      return;
+    }
+    await update({ state: 'review', lines, basket, total });
+
+    // Approval (the slot is held for about 2 hours)
+    const holdMins = Math.max(5, (new Date(res.reserved_until) - Date.now()) / 60000 - 5);
+    const ok = await waitFor(d => d.approvedBy, Math.min(holdMins, 100));
+    if (!ok) {
+      await update({ state: 'needs_you', message: 'Nobody approved the order in time. The basket and slot are still in your Sainsbury\'s account: check out in the Sainsbury\'s app, or start again here.' });
+      reserved = false;
+      return;
+    }
+    await update({ state: 'placing' });
+    await log(`Approved by ${ok.name}, placing the order`);
+    const placed = await shop.placeOrder(total);
+    reserved = false;
+    let orderNumber = placed.orderNumber;
+    const recent = await shop.orders().catch(() => []);
+    const match = recent.find(o => String(o.slot_start_time || '').startsWith(res.slot.start_time.slice(0, 16)) || (orderNumber && String(o.order_uid) === orderNumber));
+    if (match) orderNumber = orderNumber || String(match.order_uid);
+    await update({ state: 'placed', orderNumber, card: placed.card || '', total: placed.total || total, placedAt: FieldValue.serverTimestamp() });
+    await log(`Order placed${orderNumber ? ` (#${orderNumber})` : ''}`);
+    await afterPlaced(h, order, lines, res.slot.start_time.slice(0, 10));
+  } catch (e) {
+    if (e instanceof Cancelled) {
+      if (reserved) await shop.release().catch(() => {});
+      await update({ state: 'cancelled', message: 'Cancelled. The slot was released; anything already in the basket was left there.' });
+      await log('Cancelled');
+    } else if (e.code === 'BANK_CHECK') {
+      await update({ state: 'needs_you', message: e.message });
+      await log(e.message);
+    } else {
+      console.error(process.env.WORKER_QUIET ? `Order stopped: ${e.message}` : e);
+      const d = await read().catch(() => ({}));
+      const placing = d.state === 'placing';
+      if (reserved && !placing) await shop.release().catch(() => {});
+      await update({ state: placing ? 'needs_you' : 'failed', message: placing ? `Something went wrong while placing the order: ${e.message} Check the Sainsbury's app before trying again.` : e.message });
+      await log(`Stopped: ${e.message}`);
+    }
+  } finally {
+    clearInterval(heartbeat);
+    await shop.close();
+  }
+}
+
+function londonDate(t) {
+  return new Date(t).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+}
+
+// Record what was bought: staples' last_bought, meals chosen, list items done.
+async function afterPlaced(h, order, lines, delivery) {
+  const b = db.batch();
+  for (const l of lines) {
+    if (l.result !== 'added') continue;
+    if (l.source === 'staple') b.set(h.ref.collection('staples').doc(l.key.slice(7)), { last_bought: delivery }, { merge: true });
+    if (l.source === 'list' && l.listId) b.delete(h.ref.collection('list').doc(l.listId));
+  }
+  for (const id of order.meals || []) b.set(h.ref.collection('meals').doc(id), { timesChosen: FieldValue.increment(1), lastChosen: delivery }, { merge: true });
+  b.set(h.ref.collection('weeks').doc(order.week), { status: 'ordered', orderedFor: delivery }, { merge: true });
+  await b.commit();
+}
+
+async function main() {
+  if (process.argv[2] === 'ideas') return ideas();
+  if (process.argv[2] === 'check') {
+    // Quick look before the workflow installs a browser.
+    const n = (await waitingOrders()).length;
+    console.log(n ? `${n} order(s) waiting` : 'No orders waiting');
+    if (process.env.GITHUB_OUTPUT) (await import('node:fs')).appendFileSync(process.env.GITHUB_OUTPUT, `work=${n ? 'yes' : 'no'}\n`);
+    return;
+  }
+  if (!process.env.SAINSBURYS_EMAIL || !process.env.SAINSBURYS_PASSWORD) throw new Error('SAINSBURYS_EMAIL and SAINSBURYS_PASSWORD must be set');
+  const waiting = await waitingOrders();
+  if (!waiting.length) { console.log('No orders waiting'); return; }
+  console.log(`${waiting.length} order(s) to do`);
+  for (const o of waiting) await processOrder(o);
+}
+
+main().then(() => process.exit(0), e => { console.error(e); process.exit(1); });

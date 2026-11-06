@@ -1,0 +1,38 @@
+// A pretend Sainsbury's with the same methods as sainsburys.mjs, for testing
+// the app and worker without touching a real account. The SMS code is 123456.
+export class FakeSainsburys {
+  constructor({ log = console.log } = {}) { this.log = log; this.items = []; }
+  async open() {}
+  async close() {}
+  async login(email, password, getCode) {
+    const code = await getCode();
+    if (code !== '123456') throw new Error('Sainsbury\'s didn\'t accept that code.');
+    this.log('Logged in (pretend shop)');
+  }
+  async search(term) {
+    if (/nothing/i.test(term)) return [];
+    return [{ uid: `p-${term.toLowerCase().replace(/\W+/g, '-')}`.slice(0, 40), name: `Sainsbury's ${term}`, price: 1.5, available: true }];
+  }
+  async slots() {
+    const out = [];
+    const base = new Date(); base.setUTCHours(0, 0, 0, 0);
+    for (let d = 1; d <= 8; d++) for (const h of [8, 12, 18]) {
+      const s = new Date(base.getTime() + d * 864e5 + h * 36e5);
+      out.push({ start_time: s.toISOString().replace('.000', ''), end_time: new Date(s.getTime() + 36e5).toISOString().replace('.000', ''), price: h === 18 ? 1.5 : 0, is_green: h === 12, booking_key: `k${d}${h}`, is_available: true, slot_type: '1hour' });
+    }
+    return out;
+  }
+  async reserve(slot) { return { reserved_until: new Date(Date.now() + 2 * 36e5).toISOString(), slot }; }
+  async release() {}
+  async basket() {
+    const subtotal = this.items.reduce((t, i) => t + i.subtotal_price, 0);
+    return { items: this.items, subtotal_price: subtotal, total_price: subtotal + 1, slot_price: 1, savings: 0, minimum_spend: 25, has_exceeded_minimum_spend: subtotal >= 25 };
+  }
+  async add(uid, quantity) {
+    if (/unavailable/.test(uid)) { const e = new Error('400'); e.status = 400; throw e; }
+    const price = 2.5;
+    this.items.push({ quantity, subtotal_price: price * quantity, product: { sku: uid, name: uid.replace(/^p-/, '').replace(/-/g, ' ') }, promotions: [] });
+  }
+  async orders() { return []; }
+  async placeOrder(expected) { return { orderNumber: '1000000001', card: 'Test card ending 0000', total: expected }; }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "weekly-shop-app",
+  "private": true,
+  "type": "module",
+  "description": "Shared weekly Sainsbury's shop. The site is static (no build step); these packages are for the order worker and tests.",
+  "scripts": {
+    "worker": "xvfb-run -a node worker/run.mjs",
+    "ideas": "node worker/run.mjs ideas",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "playwright": "^1.63.0"
+  }
+}

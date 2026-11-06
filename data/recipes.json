@@ -1,0 +1,94 @@
+{
+  "note": "Starter meal library for a family of four. Each ingredient has a Sainsbury's search term; the order worker picks the top search result unless a product id is set. Store-cupboard basics (oil, salt, pepper, stock cubes) are left out.",
+  "meals": [
+    { "name": "Greek chicken traybake with potatoes, feta and cucumber salad", "tags": ["chicken", "traybake"], "ingredients": [
+      { "item": "Chicken thighs", "search": "sainsburys british chicken thigh fillets 1kg", "qty": 1 },
+      { "item": "Baby potatoes", "search": "sainsburys baby potatoes 1kg", "qty": 1 },
+      { "item": "Feta", "search": "sainsburys greek feta 200g", "qty": 1 },
+      { "item": "Red onions", "search": "sainsburys red onions", "qty": 1 },
+      { "item": "Lemons", "search": "sainsburys unwaxed lemons", "qty": 1 },
+      { "item": "Cherry tomatoes", "search": "sainsburys cherry tomatoes 250g", "qty": 1 } ] },
+    { "name": "Mild beef and bean chilli with rice and grated cheddar", "tags": ["beef", "batch"], "ingredients": [
+      { "item": "Beef mince", "search": "sainsburys british beef mince 5% fat 500g", "qty": 1 },
+      { "item": "Kidney beans", "search": "sainsburys red kidney beans in water 400g", "qty": 2 },
+      { "item": "Chopped tomatoes", "search": "sainsburys chopped tomatoes 400g", "qty": 2 },
+      { "item": "Onions", "search": "sainsburys brown onions", "qty": 1 },
+      { "item": "Red pepper", "search": "sainsburys red peppers", "qty": 1 },
+      { "item": "Basmati rice", "search": "sainsburys basmati rice 1kg", "qty": 1 } ] },
+    { "name": "Teriyaki chicken noodle stir-fry with sugar snaps and carrots", "tags": ["chicken", "quick"], "ingredients": [
+      { "item": "Chicken breast", "search": "sainsburys british chicken breast fillets 640g", "qty": 1 },
+      { "item": "Egg noodles", "search": "sainsburys medium egg noodles", "qty": 1 },
+      { "item": "Sugar snap peas", "search": "sainsburys sugar snap peas", "qty": 1 },
+      { "item": "Carrots", "search": "sainsburys carrots 1kg", "qty": 1 },
+      { "item": "Teriyaki sauce", "search": "teriyaki sauce", "qty": 1 } ] },
+    { "name": "Butternut squash and spinach risotto with parmesan", "tags": ["vegetarian"], "ingredients": [
+      { "item": "Butternut squash", "search": "sainsburys butternut squash", "qty": 1 },
+      { "item": "Baby spinach", "search": "sainsburys baby spinach 240g", "qty": 1 },
+      { "item": "Risotto rice", "search": "sainsburys arborio risotto rice", "qty": 1 },
+      { "item": "Parmesan", "search": "sainsburys parmigiano reggiano", "qty": 1 },
+      { "item": "Onions", "search": "sainsburys brown onions", "qty": 1 } ] },
+    { "name": "Sausage, bean and veg casserole with crusty bread", "tags": ["pork", "batch"], "ingredients": [
+      { "item": "Pork sausages", "search": "sainsburys british pork sausages taste the difference", "qty": 1 },
+      { "item": "Cannellini beans", "search": "sainsburys cannellini beans 400g", "qty": 1 },
+      { "item": "Chopped tomatoes", "search": "sainsburys chopped tomatoes 400g", "qty": 2 },
+      { "item": "Carrots", "search": "sainsburys carrots 1kg", "qty": 1 },
+      { "item": "Crusty bread", "search": "sainsburys crusty white bloomer", "qty": 1 } ] },
+    { "name": "Honey and soy salmon with sticky rice and broccoli", "tags": ["fish", "quick"], "ingredients": [
+      { "item": "Salmon fillets", "search": "sainsburys scottish salmon fillets x4", "qty": 1 },
+      { "item": "Sticky rice", "search": "sainsburys jasmine rice", "qty": 1 },
+      { "item": "Tenderstem broccoli", "search": "sainsburys tenderstem broccoli", "qty": 1 },
+      { "item": "Soy sauce", "search": "kikkoman soy sauce", "qty": 1 } ] },
+    { "name": "Chicken fajita wraps with peppers, soured cream and salsa", "tags": ["chicken", "quick"], "ingredients": [
+      { "item": "Chicken breast", "search": "sainsburys british chicken breast fillets 640g", "qty": 1 },
+      { "item": "Mixed peppers", "search": "sainsburys mixed peppers x3", "qty": 1 },
+      { "item": "Tortilla wraps", "search": "sainsburys plain tortilla wraps x8", "qty": 1 },
+      { "item": "Fajita seasoning", "search": "old el paso fajita seasoning", "qty": 1 },
+      { "item": "Soured cream", "search": "sainsburys soured cream 300ml", "qty": 1 },
+      { "item": "Salsa", "search": "sainsburys mild salsa", "qty": 1 } ] },
+    { "name": "Turkey meatballs with spaghetti and tomato sauce", "tags": ["turkey", "kids"], "ingredients": [
+      { "item": "Turkey meatballs", "search": "sainsburys turkey meatballs", "qty": 1 },
+      { "item": "Spaghetti", "search": "sainsburys spaghetti 500g", "qty": 1 },
+      { "item": "Passata", "search": "sainsburys passata 500g", "qty": 1 },
+      { "item": "Parmesan", "search": "sainsburys parmigiano reggiano", "qty": 1 } ] },
+    { "name": "Homemade pizza night", "tags": ["kids", "weekend"], "ingredients": [
+      { "item": "Pizza bases", "search": "sainsburys pizza bases x2", "qty": 1 },
+      { "item": "Pizza sauce", "search": "pizza topping sauce", "qty": 1 },
+      { "item": "Mozzarella", "search": "sainsburys grated mozzarella", "qty": 1 },
+      { "item": "Ham", "search": "sainsburys british cooked ham", "qty": 1 },
+      { "item": "Sweetcorn", "search": "sainsburys sweetcorn 198g", "qty": 1 } ] },
+    { "name": "Baked rigatoni with tomato and mozzarella, green salad", "tags": ["vegetarian", "pasta"], "ingredients": [
+      { "item": "Rigatoni", "search": "sainsburys rigatoni 500g", "qty": 1 },
+      { "item": "Passata", "search": "sainsburys passata 500g", "qty": 1 },
+      { "item": "Mozzarella balls", "search": "sainsburys mozzarella 125g", "qty": 2 },
+      { "item": "Mixed salad", "search": "sainsburys mixed leaf salad", "qty": 1 } ] },
+    { "name": "Pancetta carbonara with linguine", "tags": ["pork", "quick", "pasta"], "ingredients": [
+      { "item": "Pancetta", "search": "sainsburys cubetti di pancetta", "qty": 1 },
+      { "item": "Linguine", "search": "sainsburys linguine 500g", "qty": 1 },
+      { "item": "Parmesan", "search": "sainsburys parmigiano reggiano", "qty": 1 } ] },
+    { "name": "Chicken tikka masala with sticky rice", "tags": ["chicken", "curry"], "ingredients": [
+      { "item": "Chicken thighs", "search": "sainsburys british chicken thigh fillets 1kg", "qty": 1 },
+      { "item": "Tikka masala sauce", "search": "pataks tikka masala sauce", "qty": 1 },
+      { "item": "Basmati rice", "search": "sainsburys basmati rice 1kg", "qty": 1 },
+      { "item": "Naan", "search": "sainsburys plain naan x2", "qty": 1 } ] },
+    { "name": "Fish pie with a cheesy mash top and peas", "tags": ["fish"], "ingredients": [
+      { "item": "Fish pie mix", "search": "sainsburys fish pie mix", "qty": 1 },
+      { "item": "Potatoes", "search": "sainsburys maris piper potatoes 2kg", "qty": 1 },
+      { "item": "Frozen peas", "search": "sainsburys garden peas frozen", "qty": 1 } ] },
+    { "name": "Lamb kofta flatbreads with tzatziki and salad", "tags": ["lamb"], "ingredients": [
+      { "item": "Lamb koftas", "search": "sainsburys lamb koftas", "qty": 1 },
+      { "item": "Flatbreads", "search": "sainsburys flatbreads", "qty": 1 },
+      { "item": "Tzatziki", "search": "sainsburys tzatziki", "qty": 1 },
+      { "item": "Little gem lettuce", "search": "sainsburys little gem lettuce", "qty": 1 } ] },
+    { "name": "Chicken, leek and mushroom pie", "tags": ["chicken", "weekend"], "ingredients": [
+      { "item": "Chicken thighs", "search": "sainsburys british chicken thigh fillets 1kg", "qty": 1 },
+      { "item": "Leeks", "search": "sainsburys leeks", "qty": 1 },
+      { "item": "Mushrooms", "search": "sainsburys closed cup mushrooms 300g", "qty": 1 },
+      { "item": "Puff pastry", "search": "jus rol puff pastry sheet", "qty": 1 },
+      { "item": "Crème fraîche", "search": "sainsburys half fat creme fraiche 300ml", "qty": 1 } ] },
+    { "name": "Garlic king prawn linguine", "tags": ["fish", "quick", "pasta"], "ingredients": [
+      { "item": "King prawns", "search": "sainsburys raw king prawns", "qty": 1 },
+      { "item": "Linguine", "search": "sainsburys linguine 500g", "qty": 1 },
+      { "item": "Garlic", "search": "sainsburys garlic", "qty": 1 },
+      { "item": "Cherry tomatoes", "search": "sainsburys cherry tomatoes 250g", "qty": 1 } ] }
+  ]
+}

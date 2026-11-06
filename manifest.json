@@ -1,0 +1,17 @@
+{
+  "id": "./?app=weekly-shop",
+  "name": "Weekly Shop",
+  "short_name": "Shop",
+  "description": "Pick the week's meals together, keep a shared list, and send the shop to Sainsbury's.",
+  "start_url": "./?source=homescreen#/week",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f4ee",
+  "theme_color": "#2f6b3f",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

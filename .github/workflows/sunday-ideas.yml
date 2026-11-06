@@ -1,0 +1,21 @@
+name: Sunday meal ideas
+
+# 07:30 UK time in winter (06:30 in summer): make the week's 10 meal ideas.
+on:
+  schedule:
+    - cron: '30 7 * * 0'
+  workflow_dispatch:
+
+jobs:
+  ideas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci --omit=dev
+      - run: node worker/run.mjs ideas
