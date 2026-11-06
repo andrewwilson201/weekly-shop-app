@@ -14,6 +14,7 @@ import { initializeApp, cert, applicationDefault } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 
 import { FakeSainsburys } from './fake.mjs';
+import { fetchRecipe } from './recipe.mjs';
 
 // SAINSBURYS_FAKE=1 swaps in a pretend shop, for testing the app end to end.
 // The real one loads Playwright, so it's imported only when needed.
@@ -65,6 +66,45 @@ async function waitingOrders() {
     out.push(...q.docs.map(d => ({ h, ref: d.ref, data: d.data() })));
   }
   return out;
+}
+
+// ---------- recipe links ----------
+async function waitingImports() {
+  const out = [];
+  for (const h of await households()) {
+    const q = await h.ref.collection('imports').where('state', '==', 'requested').get();
+    out.push(...q.docs.map(d => ({ h, ref: d.ref, data: d.data() })));
+  }
+  return out;
+}
+
+// Reads the recipe at the link and saves it as a meal. If asked, also adds it
+// to this week's ideas and picks it for whoever shared the link.
+async function processImport({ h, ref, data }) {
+  try {
+    const r = await (process.env.RECIPE_FAKE ? fakeRecipe(data.url) : fetchRecipe(data.url));
+    const meal = h.ref.collection('meals').doc();
+    await meal.set({ name: r.name || 'Recipe from a link', ingredients: r.ingredients, source: data.url, image: r.image || null, servings: r.servings || null, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: data.by || null });
+    if (data.addToWeek) {
+      const week = h.ref.collection('weeks').doc(weekId(new Date()));
+      const update = { offered: FieldValue.arrayUnion(meal.id), createdAt: FieldValue.serverTimestamp() };
+      if (data.by?.uid) update.picks = { [meal.id]: data.by };
+      // Keep an existing week's createdAt.
+      if ((await week.get()).exists) delete update.createdAt;
+      await week.set(update, { merge: true });
+    }
+    await ref.update({ state: 'done', mealId: meal.id, name: r.name, count: r.ingredients.length, doneAt: FieldValue.serverTimestamp() });
+    console.log(`Imported a recipe (${r.ingredients.length} ingredients)`);
+  } catch (e) {
+    await ref.update({ state: 'failed', message: e.message || String(e) });
+    console.log(`Recipe import failed: ${e.message}`);
+  }
+}
+async function fakeRecipe(url) {
+  const { extractRecipe, parseIngredient } = await import('./recipe.mjs');
+  const html = (await import('node:fs')).readFileSync(new URL('../test/fixtures/recipe.html', import.meta.url), 'utf8');
+  const r = extractRecipe(html, url);
+  return { ...r, ingredients: r.ingredients.map(parseIngredient) };
 }
 
 async function processOrder({ h, ref }) {
@@ -235,9 +275,12 @@ async function main() {
     // Quick look before the workflow installs a browser.
     const n = (await waitingOrders()).length;
     console.log(n ? `${n} order(s) waiting` : 'No orders waiting');
+    // Recipe links don't need the browser, so do them straight away.
+    for (const i of await waitingImports()) await processImport(i);
     if (process.env.GITHUB_OUTPUT) (await import('node:fs')).appendFileSync(process.env.GITHUB_OUTPUT, `work=${n ? 'yes' : 'no'}\n`);
     return;
   }
+  for (const i of await waitingImports()) await processImport(i);
   if (!process.env.SAINSBURYS_EMAIL || !process.env.SAINSBURYS_PASSWORD) throw new Error('SAINSBURYS_EMAIL and SAINSBURYS_PASSWORD must be set');
   const waiting = await waitingOrders();
   if (!waiting.length) { console.log('No orders waiting'); return; }

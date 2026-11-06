@@ -9,6 +9,7 @@
 //   households/{hid}/weeks/{sunday} { offered[mealId], picks{mealId: uid}, deliveryDate, extras{lineKey: bool}, status }
 //   households/{hid}/list/{id}      { text, qty, addedBy, addedAt, done }
 //   households/{hid}/staples/{id}   { product_uid, name, rule, quantity, every_days, last_bought, dropped }
+//   households/{hid}/imports/{id}   recipe link to read: { url, addToWeek, by, state: requested|done|failed, mealId, name, count, message }
 //   households/{hid}/orders/{id}    order run, driven by worker/run.mjs:
 //        { week, deliveryDate, state, requestedBy, lines[], smsCode, slots[], slotChoice, total, approvedBy, error, log[] }
 
@@ -31,7 +32,7 @@ if (emulator) {
 
 export { serverTimestamp, deleteField, arrayUnion };
 
-const state = { user: null, profile: null, household: null, meals: [], list: [], staples: [], weeks: {}, orders: [], ready: false };
+const state = { user: null, profile: null, household: null, meals: [], list: [], staples: [], weeks: {}, orders: [], imports: [], ready: false };
 const listeners = new Set();
 let unsubs = [];
 const emit = () => listeners.forEach(fn => fn(state));
@@ -58,7 +59,7 @@ export async function testSignIn(name, email) {
 getRedirectResult(auth).catch(() => {});
 onAuthStateChanged(auth, async (u) => {
   unsubs.forEach(f => f()); unsubs = [];
-  Object.assign(state, { user: u, profile: null, household: null, meals: [], list: [], staples: [], weeks: {}, orders: [], ready: !u });
+  Object.assign(state, { user: u, profile: null, household: null, meals: [], list: [], staples: [], weeks: {}, orders: [], imports: [], ready: !u });
   emit();
   if (!u) return;
   unsubs.push(onSnapshot(doc(db, 'shopUsers', u.uid), snap => {
@@ -85,6 +86,9 @@ function watchHousehold(hid) {
   unsubs.push(coll('staples', 'staples'));
   unsubs.push(onSnapshot(query(collection(db, h('weeks')), orderBy('createdAt', 'desc'), limit(8)), snap => {
     state.weeks = Object.fromEntries(snap.docs.map(d => [d.id, { id: d.id, ...d.data() }])); emit();
+  }));
+  unsubs.push(onSnapshot(query(collection(db, h('imports')), orderBy('createdAt', 'desc'), limit(10)), snap => {
+    state.imports = snap.docs.map(d => ({ id: d.id, ...d.data() })); emit();
   }));
   unsubs.push(onSnapshot(query(collection(db, h('orders')), orderBy('createdAt', 'desc'), limit(10)), snap => {
     state.orders = snap.docs.map(d => ({ id: d.id, ...d.data() })); emit();

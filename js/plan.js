@@ -71,7 +71,8 @@ export function buildShop({ staples = [], meals = [], list = [], delivery, extra
   for (const m of meals) {
     for (const ing of m.ingredients || []) {
       const key = `meal:${m.id}:${ing.item}`;
-      if (extras[key] === false) continue;
+      // Store-cupboard things (oil, salt, stock...) only when ticked.
+      if (extras[key] === false || (ing.pantry && extras[key] !== true)) continue;
       put({ key, source: 'meal', uid: ing.uid || null, search: ing.search || ing.item, name: ing.item, qty: ing.qty || 1, for: [m.name] });
     }
   }

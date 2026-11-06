@@ -58,6 +58,7 @@ function render() {
   if (!st.household?.members) { $main.innerHTML = viewSetup(); bind(); return; }
   $main.innerHTML = routes[route]();
   bind();
+  takeSharedLink();
   restore(focus);
 }
 
@@ -237,7 +238,7 @@ function viewShop() {
   // Staples not added: suggestions and ones switched off
   const off = st.staples.filter(s => !lines.some(l => l.key === `staple:${s.id}`)).map(s => ({ s, status: stapleStatus(s, w?.deliveryDate || addDays(today(), 2)) }))
     .filter(x => x.status === 'suggest' || extras[`staple:${x.s.id}`] === false);
-  const offMeal = pickedMeals().flatMap(m => (m.ingredients || []).filter(i => extras[`meal:${m.id}:${i.item}`] === false).map(i => ({ key: `meal:${m.id}:${i.item}`, name: i.item, for: m.name })));
+  const offMeal = pickedMeals().flatMap(m => (m.ingredients || []).filter(i => !lines.some(l => l.key === `meal:${m.id}:${i.item}`)).map(i => ({ key: `meal:${m.id}:${i.item}`, name: i.item, for: i.pantry && extras[`meal:${m.id}:${i.item}`] !== false ? `${m.name} · probably in the cupboard` : m.name })));
   if (off.length || offMeal.length) {
     html += `<details class="card soft"><summary>Suggestions and things you unticked (${off.length + offMeal.length})</summary><ul class="list">` +
       off.map(({ s, status }) => `<li><input type="checkbox" class="check" data-change="lineOn" data-id="staple:${esc(s.id)}"><span class="grow">${esc(s.name)}<br><span class="meta">${status === 'suggest' ? 'Sometimes needed for meals' : 'Unticked'}</span></span></li>`).join('') +
@@ -344,7 +345,13 @@ actions.cancelOrder = () => {
 function viewMeals() {
   const meals = [...st.meals].filter(m => !m.archived).sort((a, b) => (b.timesChosen || 0) - (a.timesChosen || 0) || a.name.localeCompare(b.name));
   let html = `<h1>Meals</h1><p class="sub">Your meal library. The most picked come up as favourites each week.</p>
-    <div class="row"><a class="btn primary" href="#/meal/new">Add a meal</a>${st.meals.length ? '' : '<button class="btn" data-act="loadStarter">Load starter meals</button>'}</div>`;
+    <form class="card" data-form="importLink"><label class="field" style="margin:0 0 8px">Add a recipe from a link
+      <input type="url" name="url" data-keep="importUrl" placeholder="https://www.bbcgoodfood.com/recipes/…" inputmode="url" autocomplete="off" required></label>
+      <label class="row small"><input type="checkbox" name="week" class="check" checked> Pick it for this week</label>
+      <button class="btn primary block" style="margin-top:10px">Add recipe</button>
+      <p class="small muted" style="margin:8px 0 0">Or share a recipe page to Weekly Shop from your phone's share menu. It takes a few minutes to read.</p></form>
+    ${importsHtml()}
+    <div class="row"><a class="btn" href="#/meal/new">Type in a meal</a>${st.meals.length ? '' : '<button class="btn" data-act="loadStarter">Load starter meals</button>'}</div>`;
   const inWeek = new Set(week()?.offered || []);
   html += `<ul class="list card" style="margin-top:12px">` + meals.map(m => `<li><a href="#/meal/${m.id}" class="grow" style="text-decoration:none">
       <span class="name">${esc(m.name)}</span><br><span class="meta">${(m.ingredients || []).length} ingredients${m.timesChosen ? ` · picked ${m.timesChosen}×` : ''}${m.lastChosen ? `, last ${fmtDay(m.lastChosen)}` : ''}</span></a>
@@ -353,17 +360,47 @@ function viewMeals() {
   if (archived.length) html += `<details class="card soft"><summary>Removed meals (${archived.length})</summary><ul class="list">${archived.map(m => `<li><span class="grow">${esc(m.name)}</span><button class="btn small" data-act="unarchive" data-id="${m.id}">Restore</button></li>`).join('')}</ul></details>`;
   return html;
 }
+function importsHtml() {
+  const recent = st.imports.filter(i => i.state !== 'done' || (i.doneAt && Date.now() - i.doneAt.toMillis() < 864e5)).slice(0, 5);
+  if (!recent.length) return '';
+  return `<ul class="list card">` + recent.map(i => `<li><span class="grow"><span class="name">${esc(i.name || i.url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 60))}</span><br>
+    <span class="meta">${i.state === 'requested' ? 'Reading the recipe, usually within 10 minutes…' : i.state === 'failed' ? esc(i.message || 'Couldn\'t read it') : `${i.count} ingredients added${i.addToWeek ? ', picked for this week' : ''}`}</span></span>
+    ${i.state === 'done' && i.mealId ? `<a class="btn small" href="#/meal/${i.mealId}">Check it</a>` : ''}
+    ${i.state !== 'requested' ? `<button class="iconbtn" data-act="dismissImport" data-id="${i.id}" aria-label="Dismiss"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>` : ''}</li>`).join('') + `</ul>`;
+}
+async function importLink(url, addToWeek = true) {
+  url = String(url).trim();
+  if (!/^https?:\/\//i.test(url)) throw new Error('That doesn\'t look like a web link');
+  await S.addH(['imports'], { url, addToWeek, by: S.me(), state: 'requested', createdAt: S.serverTimestamp() });
+}
+actions.importLink = f => { const url = f.url.value; const wk = f.week.checked; keep.importUrl = ''; run(() => importLink(url, wk), 'Got it. It\'ll appear in a few minutes'); };
+actions.dismissImport = el => run(() => S.deleteH(['imports', el.dataset.id]));
+// Links shared to the app (Web Share Target in manifest.json): ?url=…&text=…&title=…
+let sharedLink = (() => {
+  const q = new URLSearchParams(location.search);
+  if (!q.has('url') && !q.has('text')) return null;
+  const found = [q.get('url'), q.get('text'), q.get('title')].join(' ').match(/https?:\/\/\S+/);
+  history.replaceState(null, '', location.pathname + '#/meals');
+  return found ? found[0] : null;
+})();
+function takeSharedLink() {
+  if (!sharedLink || !st.household?.members) return;
+  const url = sharedLink; sharedLink = null;
+  run(() => importLink(url, true), 'Recipe link added. It\'ll appear in a few minutes');
+}
+
 actions.offer = el => run(() => S.setH(['weeks', thisWeekId()], { offered: [...(week().offered || []), el.dataset.id] }), 'Added to this week');
 actions.unarchive = el => run(() => S.updateH(['meals', el.dataset.id], { archived: false }));
 
 function viewMeal() {
   const m = arg === 'new' ? { name: '', ingredients: [] } : mealById(arg);
   if (!m) return `<p class="empty">Meal not found.</p>`;
-  const lines = (m.ingredients || []).map(i => `${i.item}${i.qty > 1 ? ` x${i.qty}` : ''}${i.search && i.search !== i.item ? ` | ${i.search}` : ''}`).join('\n');
+  const lines = (m.ingredients || []).map(i => `${i.item}${i.qty > 1 ? ` x${i.qty}` : ''}${i.pantry ? ' (cupboard)' : ''}${i.search && ![i.item.toLowerCase(), `sainsburys ${i.item.toLowerCase()}`].includes(i.search.toLowerCase()) ? ` | ${i.search}` : ''}`).join('\n');
   return `<h1>${arg === 'new' ? 'Add a meal' : 'Edit meal'}</h1>
     <form class="card" data-form="saveMeal">
       <label class="field">Name<input type="text" name="name" value="${esc(m.name)}" required data-keep="mealName"></label>
-      <label class="field">Ingredients, one per line. Add “x2” for two, and “| search words” to pick the exact Sainsbury's product.
+      ${m.source ? `<p class="small muted">From <a href="${esc(m.source)}" target="_blank" rel="noopener">${esc(m.source.replace(/^https?:\/\/(www\.)?/, '').split('/')[0])}</a></p>` : ''}
+      <label class="field">Ingredients, one per line. Add “x2” for two, “(cupboard)” for things you usually have, and “| search words” to pick the exact Sainsbury's product.
         <textarea name="ingredients" rows="8" placeholder="Chicken thighs x2&#10;Lemons | sainsburys unwaxed lemons" data-keep="mealIng">${esc(lines)}</textarea></label>
       <div class="row"><button class="btn primary">Save</button><a class="btn" href="#/meals">Back</a><span class="spacer"></span>
       ${arg === 'new' ? '' : '<button type="button" class="btn danger" data-act="archiveMeal">Remove</button>'}</div>
@@ -371,10 +408,12 @@ function viewMeal() {
 }
 actions.saveMeal = f => {
   const ingredients = f.ingredients.value.split('\n').map(s => s.trim()).filter(Boolean).map(line => {
-    const [left, search] = line.split('|').map(s => s.trim());
+    let [left, search] = line.split('|').map(s => s.trim());
+    const pantry = /\(cupboard\)/i.test(left);
+    left = left.replace(/\s*\(cupboard\)\s*/i, ' ').trim();
     const m = left.match(/^(.*?)\s*(?:x|×)\s*(\d+)$/i);
     const item = m ? m[1] : left;
-    return { item, qty: m ? +m[2] : 1, search: search || item };
+    return { item, qty: m ? +m[2] : 1, search: search || item, ...(pantry ? { pantry: true } : {}) };
   });
   const data = { name: f.name.value.trim(), ingredients };
   keep = {};

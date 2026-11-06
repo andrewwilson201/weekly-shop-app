@@ -6,7 +6,7 @@
   "scripts": {
     "worker": "xvfb-run -a node worker/run.mjs",
     "ideas": "node worker/run.mjs ideas",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "firebase-admin": "^13.0.0",

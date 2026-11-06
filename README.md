@@ -10,6 +10,7 @@ It's built the same way as [music-app](https://github.com/andrewwilson201/music-
 - **This week**: 10 meal ideas, favourites (most often picked) first, then ones you haven't had for a while. Either person taps to pick, and chooses a delivery day. Ideas are made each Sunday morning by the *Sunday meal ideas* workflow, or with the button in the app.
 - **List**: the shared shopping list. Type “olive oil x2” for two. Items that get ordered are removed afterwards; ones Sainsbury's didn't have stay.
 - **Shop**: staples that are due, ingredients for the picked meals, and the list, merged into one list. Untick anything you don't need.
+- **Recipe links**: paste a recipe's web address on Meals (or share the page to Weekly Shop from the phone's share menu, once the app is installed). Within a few minutes the worker reads the page's recipe data ([`worker/recipe.mjs`](worker/recipe.mjs), the schema.org Recipe most sites include), turns lines like “2 x 400g tins chopped tomatoes” into shop items, and saves it as a meal, picked for this week if you ticked that. Store-cupboard things (oil, salt, spices, stock) are marked “(cupboard)” and left out of the shop unless ticked.
 - **Meals**: the meal library. Each ingredient line is “item x2 | search words”; the search words pick the Sainsbury's product.
 - **Staples**: worked out from past orders (the rules from `build-staples.py`: every-week items always, others when due, skipped if not bought for a long time). Turn one off if you've stopped buying it.
 
@@ -42,7 +43,8 @@ Sainsbury's findings (Nov 2026): headless browsers get “Access Denied”, a vi
 npm install
 firebase emulators:start --only auth,firestore      # Firestore on 8081, Auth on 9099
 python3 -m http.server 8000                          # then open http://localhost:8000/?emulator
-sh test/reset-emulators.sh && node test/e2e.mjs      # two people, a pretend shop (SAINSBURYS_FAKE=1), order to "placed"
+npm test                                             # unit tests: due rule, shop merging, recipe parsing
+sh test/reset-emulators.sh && node test/e2e.mjs      # two people, a recipe link, a pretend shop (SAINSBURYS_FAKE=1), order to "placed"
 ```
 
 With `?emulator` the sign-in page also offers a test email sign-in, because Google sign-in needs Google's servers.

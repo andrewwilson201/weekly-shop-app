@@ -87,9 +87,27 @@ if (seed) {
   await a.screenshot({ path: `${SHOTS}/05-staples.png`, fullPage: true });
 }
 
+// Recipe from a link (the worker reads test/fixtures/recipe.html instead of the web)
+await b.goto(`${BASE}#/meals`);
+await b.fill('input[name=url]', 'https://example.com/recipes/easy-chicken-fajitas');
+await b.click('button:has-text("Add recipe")');
+await b.waitForSelector('text=Reading the recipe');
+const env = { ...process.env, FIRESTORE_EMULATOR_HOST: 'localhost:8081', RECIPE_FAKE: '1' };
+await new Promise(r => spawn(process.execPath, ['worker/run.mjs', 'check'], { env, stdio: 'inherit' }).on('exit', r));
+await b.waitForSelector('text=11 ingredients added', { timeout: 15000 });
+await b.screenshot({ path: `${SHOTS}/05b-import.png`, fullPage: true });
+await a.goto(`${BASE}#/week`);
+await a.waitForSelector('.meal.on:has-text("Easy chicken fajitas")');
+assert(true, 'recipe link became a meal, picked for this week');
+await b.click('text=Check it');
+await b.waitForSelector('textarea[name=ingredients]');
+assert(/Olive oil \(cupboard\)/.test(await b.inputValue('textarea[name=ingredients]')), 'cupboard items marked');
+await b.screenshot({ path: `${SHOTS}/05c-imported-meal.png`, fullPage: true });
+
 // The shop
 await a.goto(`${BASE}#/shop`);
 await a.waitForSelector('text=For the meals');
+assert(await a.isVisible('text=Black beans'), 'imported recipe ingredients are in the shop');
 await a.screenshot({ path: `${SHOTS}/06-shop.png`, fullPage: true });
 await a.click('button:has-text("Order from Sainsbury")');
 await a.waitForSelector('text=Starting the order helper');
