@@ -3,7 +3,7 @@
 // messages; sw.js shows them. Never throws: a notification is a nice-to-have.
 import { getMessaging } from 'firebase-admin/messaging';
 
-const SITE = process.env.SITE_URL || 'https://andrewwilson201.github.io/weekly-shop-app/';
+const SITE = process.env.SITE_URL || 'https://weekly-shop-177b1.web.app/';
 
 export async function notify(h, { title, body, link = '', tag = '' }) {
   try {

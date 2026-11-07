@@ -1,0 +1,26 @@
+name: Deploy site
+
+# Publishes the app to Firebase Hosting (https://weekly-shop-177b1.web.app)
+# whenever main changes. GitHub Pages now only forwards to it.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-site
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Service account key
+        run: printf '%s' "$SA" > "$RUNNER_TEMP/sa.json"
+        env: { SA: "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}" }
+      - run: npx -y firebase-tools@15 deploy --only hosting --project weekly-shop-177b1 --non-interactive
+        env: { GOOGLE_APPLICATION_CREDENTIALS: "${{ runner.temp }}/sa.json" }
