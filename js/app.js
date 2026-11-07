@@ -1,6 +1,6 @@
 import * as S from './store.js';
 import { weekId, iso, addDays, buildShop, stapleStatus, pickIdeas, awayOn, awayWeek, skipRule, matchUsual, toCook } from './plan.js';
-import { icon, tile, avatar, MEAL_CATEGORIES, mealCategory, autoCategory } from './ui.js';
+import { icon, tile, avatar, MEAL_CATEGORIES, mealCategory, autoCategory, categoryTile } from './ui.js';
 
 const $main = document.getElementById('main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -643,7 +643,7 @@ function viewMeals() {
     const g = meals.filter(m => mealCategory(m) === key);
     if (!g.length) continue;
     html += `<details class="card flush disclosure cat" data-group="${key}" data-cat="${key}"${openCats.has(key) ? ' open' : ''}>
-      <summary>${tile({ category: key }, 'sm')}<span class="grow">${label}</span><span class="count">${g.length}</span></summary>
+      <summary>${categoryTile(key, 'sm')}<span class="grow">${label}</span><span class="count">${g.length}</span></summary>
       <ul class="list">${g.map(row).join('')}</ul></details>`;
   }
   html += `</div>`;

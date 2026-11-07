@@ -38,42 +38,60 @@ const P = {
   fish: '<path d="M3 12c3-4.5 7-6 11-6 3.5 0 6 3 7 6-1 3-3.5 6-7 6-4 0-8-1.5-11-6z"/><path d="M3 12c-1 2-1 4 0 5 1-2 1-3 0-5zM3 12c-1-2-1-4 0-5 1 2 1 3 0 5"/><circle cx="16.5" cy="11" r=".8"/>',
   drumstick: '<path d="M15.5 4.5a5 5 0 0 1 4 6.9 5 5 0 0 1-6.6 2.6L9.5 17.4a2 2 0 1 1-2.6 2.6 2 2 0 1 1-2.9-2.9 2 2 0 1 1 2.6-2.6l3.4-3.4a5 5 0 0 1 5.5-6.6z"/>',
   meat: '<path d="M7 5c5-3 13 1 13 7 0 4-3 7-8 7-6 0-9-3-9-6 0-2 1.5-3 3-3.5C5 8 5 6.5 7 5z"/><circle cx="14" cy="12" r="2"/>',
+  pasta: '<path d="M3.5 12h17a8.5 8.5 0 0 1-17 0z"/><path d="M9 12c-2-1-2-3 0-4s4 0 3 2-4 1-3-1M15 4l-3 8M19 5l-6 7"/>',
+  pot: '<path d="M4.5 10h15v6a4 4 0 0 1-4 4h-7a4 4 0 0 1-4-4z"/><path d="M2.5 10h19M9.5 6.5c0-1 1-1.5 1-2.5M14 6.5c0-1 1-1.5 1-2.5"/>',
+  pie: '<path d="M3 13h18l-2 6H5z"/><path d="M3 13c1-4 5-6 9-6s8 2 9 6"/><path d="M8 10.5l1 1.5M12 9.5V12M16 10.5l-1 1.5"/>',
+  pizza: '<path d="M12 21 3.5 6.5a14 14 0 0 1 17 0z"/><path d="M5.3 9.5a11 11 0 0 1 13.4 0"/><circle cx="12" cy="13" r="1"/><circle cx="9.8" cy="11" r=".8"/><circle cx="14" cy="10.5" r=".8"/>',
+  tray: '<rect x="2.5" y="9" width="19" height="9" rx="2"/><path d="M7 13.5c1-1.5 2-1.5 3 0M13 12.5h4M2.5 11.5H1M23 11.5h-1.5"/>',
   bowl: '<path d="M3.5 11h17a8.5 8.5 0 0 1-17 0z"/><path d="M8 7.5c0-1.5 1-2 1-3.5M12 7.5c0-1.5 1-2 1-3.5M16 7.5c0-1.5 1-2 1-3.5"/>',
 };
 export const icon = (name, cls = '') => `<svg viewBox="0 0 24 24"${cls ? ` class="${cls}"` : ''} aria-hidden="true">${P[name] || ''}</svg>`;
 
-// Meal categories for the Meals list, most specific first. A meal's own
-// category (set on its edit screen) wins; then Claude's protein label; then a
-// guess from the name; then from the main ingredients.
+// Which tile a meal gets: from Claude's protein label, else a guess from the name.
+export function mealKind(m) {
+  const p = (m.protein || '').toLowerCase();
+  const n = (m.name || '').toLowerCase();
+  if (['chicken', 'turkey'].includes(p) || (!p && /chicken|turkey|duck/.test(n))) return 'poultry';
+  if (['fish', 'seafood'].includes(p) || (!p && /salmon|fish|cod|tuna|prawn|haddock|mackerel|trout|seafood|shrimp/.test(n))) return 'fish';
+  if (['beef', 'pork', 'lamb'].includes(p) || (!p && /beef|lamb|pork|sausage|pancetta|bacon|chorizo|mince|ham|steak|kofta|meatball|burger/.test(n))) return 'meat';
+  if (['vegetarian', 'vegan'].includes(p) || (!p && /veg|bean|lentil|halloumi|tofu|paneer|squash|spinach|mushroom|cauliflower|chickpea|risotto|margherita|cheese/.test(n))) return 'veg';
+  return 'other';
+}
+
+// Meal categories for the Meals list, like the chapters of a family cookbook:
+// by kind of dish first, in this order, so "chicken pasta bake" is Pasta and
+// "fish pie" is Pies & bakes. A meal that's none of these (say, salmon with
+// rice) goes in a chapter for its main ingredient. Each is [key, title, tile
+// icon, tile colour, pattern for the name and tags].
 export const MEAL_CATEGORIES = [
-  ['chicken', 'Chicken & turkey', 'poultry', /chicken|turkey|duck/],
-  ['fish', 'Fish & seafood', 'fish', /salmon|fish|cod\b|tuna|prawn|haddock|mackerel|trout|seafood|shrimp|squid|mussel|crab|hake|pollock|sea bass|kedgeree/],
-  ['beef', 'Beef', 'meat', /beef|steak|mince|burger|bolognese|meatball|cottage pie|chilli con carne/],
-  ['pork', 'Pork, sausages & ham', 'meat', /pork|sausage|pancetta|bacon|chorizo|\bham\b|gammon|carbonara|salami|pepperoni|hot dog/],
-  ['lamb', 'Lamb', 'meat', /lamb|kofta|moussaka|shepherd/],
-  ['veg', 'Vegetarian', 'veg', /vegetarian|vegan|veggie|\bveg\b|bean|lentil|dhal|dal\b|halloumi|tofu|paneer|squash|spinach|mushroom|cauliflower|chickpea|falafel|risotto|margherita|mozzarella|cheese|feta|aubergine|courgette|sweet potato|\beggs?\b/],
-  ['other', 'Other', 'other', null],
+  ['pasta', 'Pasta', 'pasta', 'poultry', /pasta|spaghetti|linguine|tagliatelle|fettuccine|penne|rigatoni|fusilli|farfalle|orzo|macaroni|mac ?(and|&|n) ?cheese|lasagne|lasagna|cannelloni|ravioli|tortellini|gnocchi|carbonara|bolognese|puttanesca|arrabbiata/],
+  ['noodles', 'Noodles & stir-fries', 'bowl', 'other', /noodle|ramen|udon|soba|pad thai|chow mein|lo mein|stir[- ]?fry|stir[- ]?fried/],
+  ['curry', 'Curries', 'pot', 'meat', /curry|curries|tikka|masala|korma|jalfrezi|balti|madras|rogan josh|vindaloo|dhal|\bdal\b|daal|biryani|massaman|rendang|saag/],
+  ['pie', 'Pies & bakes', 'pie', 'poultry', /\bpies?\b|pasties|pasty|\bbakes?\b|\bbaked\b|gratin|moussaka|enchilada|crumble|wellington|quiche|frittata|toad in the hole|hotpot/],
+  ['stew', 'Stews, soups & chillies', 'pot', 'meat', /stew|casserole|chilli|chili|tagine|goulash|soup|chowder|broth|ragout|cassoulet|bourguignon|stroganoff/],
+  ['rice', 'Rice & risotto', 'bowl', 'veg', /risotto|paella|fried rice|pilaf|pilau|jambalaya|kedgeree|congee|rice bowl|burrito bowl|poke/],
+  ['fakeaway', 'Pizzas, wraps & burgers', 'pizza', 'fish', /pizza|calzone|wrap|fajita|taco|burrito|quesadilla|nacho|burger|flatbread|kofta|pitta|pita|kebab|gyros|souvlaki|hot ?dog|sandwich|toastie|\bsub\b|\bbao\b/],
+  ['roast', 'Roasts, grills & traybakes', 'tray', 'veg', /roast|traybake|tray bake|sheet ?pan|one[- ]pan|one[- ]tray|bbq|barbecue|grill/],
+  ['salad', 'Salads', 'leaf', 'veg', /^(?!.*\bwith\b.*\bsalad).*salad/],
+  ['meat', 'Meat & poultry', 'meat', 'meat', null],
+  ['fish', 'Fish & seafood', 'fish', 'fish', null],
+  ['veg', 'Vegetarian', 'leaf', 'veg', null],
+  ['other', 'Everything else', 'bowl', 'other', null],
 ];
-const PROTEIN_CAT = { chicken: 'chicken', turkey: 'chicken', duck: 'chicken', fish: 'fish', seafood: 'fish', beef: 'beef', pork: 'pork', lamb: 'lamb', vegetarian: 'veg', vegan: 'veg' };
 const CAT_KEYS = new Set(MEAL_CATEGORIES.map(c => c[0]));
-const guess = text => (MEAL_CATEGORIES.find(([, , , re]) => re && re.test(text)) || [])[0];
+const dishType = text => (MEAL_CATEGORIES.find(([, , , , re]) => re && re.test(text)) || [])[0];
 // The category worked out without the meal's own choice: used for "Automatic".
 export function autoCategory(m) {
-  const p = PROTEIN_CAT[(m.protein || '').toLowerCase()];
-  if (p) return p;
-  const fromTags = (m.tags || []).map(t => PROTEIN_CAT[String(t).toLowerCase()]).find(Boolean);
-  if (fromTags) return fromTags;
-  const byName = guess((m.name || '').toLowerCase());
-  if (byName) return byName;
-  // Then the meat or fish among the main ingredients. Cupboard things like stock
-  // cubes would mislead, and most meals have some veg, so veg isn't guessed here.
-  const main = (m.ingredients || []).filter(i => !i.pantry && !/stock|gravy/i.test(i.item || '')).map(i => i.item || '').join(' | ').toLowerCase();
-  const g = guess(main);
-  return g && g !== 'veg' ? g : 'other';
+  const tags = (m.tags || []).map(t => String(t).toLowerCase());
+  const main = (m.ingredients || []).filter(i => !i.pantry).map(i => String(i.item || '').toLowerCase());
+  const byDish = dishType((m.name || '').toLowerCase()) || tags.map(dishType).find(Boolean)
+    // The pasta or noodles in the bag say what it is, e.g. "Meatballs in tomato sauce" with spaghetti.
+    || main.map(dishType).find(k => k === 'pasta' || k === 'noodles');
+  if (byDish) return byDish;
+  return { poultry: 'meat', meat: 'meat', fish: 'fish', veg: 'veg' }[mealKind(m)] || 'other';
 }
 export const mealCategory = m => (CAT_KEYS.has(m.category) ? m.category : autoCategory(m));
-// Which tile a meal gets: follows its category.
-export const mealKind = m => MEAL_CATEGORIES.find(c => c[0] === mealCategory(m))[2];
+export const categoryTile = (key, size = '') => { const c = MEAL_CATEGORIES.find(x => x[0] === key); return `<span class="tile ${c[3]}${size ? ` ${size}` : ''}">${icon(c[2])}</span>`; };
 const KIND_ICON = { poultry: 'drumstick', fish: 'fish', meat: 'meat', veg: 'leaf', other: 'bowl' };
 export const tile = (m, size = '') => `<span class="tile ${mealKind(m)}${size ? ` ${size}` : ''}">${icon(KIND_ICON[mealKind(m)])}</span>`;
 
