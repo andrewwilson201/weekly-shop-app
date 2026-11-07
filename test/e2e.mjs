@@ -191,6 +191,8 @@ await a.waitForSelector('button:has-text("Approve £")', { timeout: 30000 });
 await a.screenshot({ path: `${SHOTS}/09-review.png`, fullPage: true });
 assert(await a.isVisible('text=not added'), 'unfound item reported');
 assert(await a.isVisible('text=organic chicken breast'), 'meal ingredient uses the usual product (organic chicken)');
+assert(await a.isVisible('summary:has-text("cheaper swap")'), 'cheaper swaps listed for review');
+assert(await a.locator('text=/cheaper .*black beans/i').last().isVisible(), 'a cheaper equivalent was bought');
 await a.click('button:has-text("Approve")');
 await a.waitForSelector('text=Order placed', { timeout: 30000 });
 await a.screenshot({ path: `${SHOTS}/10-placed.png`, fullPage: true });

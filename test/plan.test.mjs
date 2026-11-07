@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { stapleStatus, buildShop, weekId, awayWeek, awayOn, matchUsual, recordBought } from '../js/plan.js';
+import { stapleStatus, buildShop, weekId, awayWeek, awayOn, matchUsual, recordBought, parseMultibuy, eachPrice, packSize, unitCost, searchTerms, cheapestSwap } from '../js/plan.js';
 
 test('staple due rule matches build-staples.py', () => {
   assert.equal(stapleStatus({ rule: 'every_week' }, '2026-11-10'), 'add');
@@ -98,4 +98,61 @@ test('recordBought counts a purchase and adds new products', () => {
   P = recordBought(P, '9', 'Shampoo', '2026-11-10');
   assert.equal(P.length, 2);
   assert.deepEqual(P[1], { u: '9', n: 'Shampoo', c: 1, l: '2026-11-10' });
+});
+
+// Prices as Sainsbury's search returned them on 2026-11-07 (store 0031).
+const P = {
+  mild: { uid: '7178847', name: "Sainsbury's British Mild Cheddar Cheese 400g", price: 3.2, unit: 8, measure: 'kg', offer: '' },
+  cathedral: { uid: '7511803', name: 'Cathedral City Mild Cheddar Cheese 350g', price: 2.8, unit: 8, measure: 'kg', offer: 'Save 25% with Nectar' },
+  stamford600: { uid: '7646860', name: 'Stamford Street Co. Mild Cheddar 600g', price: 3.67, unit: 6.12, measure: 'kg', offer: '' },
+  napolina: { uid: '2274379', name: 'Napolina Chopped Tomatoes 400g', price: 1.05, unit: 2.63, measure: 'kg', offer: '' },
+  sainsTom: { uid: '6365335', name: "Sainsbury's Chopped Tomatoes Can 400g", price: 0.45, unit: 1.13, measure: 'kg', offer: '' },
+  cirio4: { uid: '8265466', name: 'Cirio 4 x 400g Finely Chopped Tomatoes', price: 2.5, unit: 1.57, measure: 'kg', offer: 'Half Price with Nectar' },
+  chicken320: { uid: '7977681', name: "Sainsbury's 320g British Fresh Skinless & Boneless Chicken Breast Fillets", price: 2.44, unit: 7.63, measure: 'kg', offer: 'Buy 2 for £4.00 with Nectar' },
+  chicken640: { uid: '7874927', name: "Sainsbury's 640g British Fresh Skinless & Boneless Chicken Breast Fillets", price: 4.62, unit: 7.22, measure: 'kg', offer: 'Buy 2 for £8.00 with Nectar' },
+  bananas8: { uid: '7553276', name: "Sainsbury's Fairtrade Bananas x8", price: 1.39, unit: 0.17, measure: 'ea', offer: '' },
+  bananasLoose: { uid: '1196757', name: "Sainsbury's Bananas Loose", price: 0.9, unit: 0.9, measure: 'kg', offer: '' },
+};
+
+test('multibuys are read from the offer text', () => {
+  assert.deepEqual(parseMultibuy('Buy 2 for £4.00 with Nectar'), { n: 2, total: 4 });
+  assert.deepEqual(parseMultibuy('Buy any 2 for £5.00 with Nectar'), { n: 2, total: 5 });
+  assert.deepEqual(parseMultibuy('3 for 2'), { n: 3, pay: 2 });
+  assert.equal(parseMultibuy('Buy 1 for 3.25'), null);          // already in the price
+  assert.equal(parseMultibuy('Save 25% with Nectar'), null);    // already in the price
+});
+
+test('a multibuy only counts when the line buys enough', () => {
+  assert.equal(eachPrice(P.chicken320, 1), 2.44);
+  assert.equal(eachPrice(P.chicken320, 2), 2);
+  assert.equal(eachPrice(P.chicken320, 3), (4 + 2.44) / 3);
+  assert.equal(eachPrice({ price: 1.5, offer: '3 for 2' }, 3), 1);
+  assert.ok(Math.abs(packSize(P.cathedral) - 0.35) < 0.001);
+  assert.ok(Math.abs(unitCost(P.chicken320, 2) - 2 / (2.44 / 7.63)) < 0.001);
+});
+
+test('search words drop the store brand, range and pack size', () => {
+  assert.equal(searchTerms("Sainsbury's British Semi Skimmed Milk, SO Organic 2.27L (4 pint)"), 'British Semi Skimmed Milk');
+  assert.equal(searchTerms("Sainsbury's Italian Chopped Tomatoes 4×400g"), 'Italian Chopped Tomatoes');
+  assert.equal(searchTerms("Sainsbury's Free Range Golden Yolk Eggs, Taste the Difference x12"), 'Free Range Golden Yolk Eggs');
+});
+
+test('cheapest swap compares price per kg at a similar pack size', () => {
+  // Napolina 400g → Sainsbury's 400g tin; the Cirio 4-pack is cheaper per kg but four times the size.
+  const s = cheapestSwap(P.napolina, [P.cirio4, P.sainsTom], 2);
+  assert.equal(s.product.uid, P.sainsTom.uid);
+  assert.equal(s.saving, 1.2);
+  // Same price per kg (Nectar price included) isn't worth swapping for.
+  assert.equal(cheapestSwap(P.mild, [P.cathedral], 1), null);
+  // 600g is more than 35% bigger than 400g.
+  assert.equal(cheapestSwap(P.mild, [P.stamford600], 1), null);
+  // Loose bananas are priced per kg, the pack per banana: not compared.
+  assert.equal(cheapestSwap(P.bananas8, [P.bananasLoose], 1), null);
+  // Buying two 320g packs gets the Nectar multibuy (£2 each = £6.25/kg), beating the bigger pack's £7.22/kg.
+  assert.equal(cheapestSwap(P.chicken640, [P.chicken320], 1), null);    // 320g is half the size
+  assert.equal(cheapestSwap(P.chicken320, [P.chicken640], 2), null);    // 640g double, and dearer per kg once the multibuy counts
+  const c = cheapestSwap(P.chicken320, [P.chicken640], 1);
+  assert.equal(c, null);                                                // size check rules it out either way
+  // Catchweight (priced by weight at the till) is never swapped to or from.
+  assert.equal(cheapestSwap({ ...P.mild, catchweight: true }, [P.cathedral], 1), null);
 });

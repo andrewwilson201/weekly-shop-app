@@ -30,6 +30,7 @@ const P = {
   lock: '<rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
   message: '<path d="M4 5h16v11H9l-5 4z"/>',
   bag: '<path d="M5 8h14l-1 12H6z"/><path d="M9 8a3 3 0 0 1 6 0"/>',
+  tag: '<path d="M3 12V4h8l9 9-8 8z"/><circle cx="7.5" cy="8.5" r="1.2"/>',
   // meal tiles
   leaf: '<path d="M5 19c0-8 5-14 15-14 0 10-6 15-14 15"/><path d="M5 19c3-4 6-6.5 10-8.5"/>',
   fish: '<path d="M3 12c3-4.5 7-6 11-6 3.5 0 6 3 7 6-1 3-3.5 6-7 6-4 0-8-1.5-11-6z"/><path d="M3 12c-1 2-1 4 0 5 1-2 1-3 0-5zM3 12c-1-2-1-4 0-5 1 2 1 3 0 5"/><circle cx="16.5" cy="11" r=".8"/>',

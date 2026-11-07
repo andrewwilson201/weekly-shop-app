@@ -84,7 +84,7 @@ export function buildShop({ staples = [], meals = [], list = [], delivery, extra
     const st = stapleStatus(s, delivery);
     const on = extras[`staple:${s.id}`];
     if (st === 'add' && on !== false || (st !== 'add' && on === true)) {
-      put({ key: `staple:${s.id}`, source: 'staple', uid: s.product_uid, name: s.name, qty: s.quantity || 1, status: st });
+      put({ key: `staple:${s.id}`, source: 'staple', uid: s.product_uid, name: s.name, qty: s.quantity || 1, status: st, ...(s.keep ? { keep: true } : {}) });
     }
   }
   for (const m of meals) {
@@ -166,4 +166,76 @@ export function usualCandidates(item, products = [], max = 15) {
   const out = [...matchUsual(item, products, max)];
   if (w.length > 1) for (const p of matchUsual(w[w.length - 1], products, max)) if (!out.includes(p)) out.push(p);
   return out.slice(0, max);
+}
+
+// ---------- Cheaper swaps ----------
+// Sainsbury's search results already show offer prices in retail_price and
+// unit_price, Nectar prices included ("Save 25% with Nectar", "Half price with
+// Nectar"); original_unit_price is the price before the offer. Multibuys
+// ("Buy 2 for £4.00 with Nectar", "3 for 2") aren't in those prices, so they're
+// worked out here, and only count when the line buys enough to get them.
+
+// "Buy any 2 for £5.00 with Nectar" → { n: 2, total: 5 }; "3 for 2" → { n: 3, pay: 2 }.
+export function parseMultibuy(strap = '') {
+  let m = String(strap).match(/(?:buy\s+)?(?:any\s+)?(\d+)\s+for\s+£\s?(\d+(?:\.\d+)?)/i);
+  if (m && Number(m[1]) >= 2) return { n: Number(m[1]), total: Number(m[2]) };
+  m = String(strap).match(/(?:buy\s+)?(?:any\s+)?(\d+)\s+for\s+(?:the\s+price\s+of\s+)?(\d+)\b(?!\.)/i);
+  if (m && Number(m[1]) > Number(m[2]) && Number(m[2]) >= 1) return { n: Number(m[1]), pay: Number(m[2]) };
+  return null;
+}
+
+// Price of one item when buying `qty`, after any multibuy it qualifies for.
+export function eachPrice(p, qty = 1) {
+  const price = Number(p.price);
+  const mb = parseMultibuy(p.offer);
+  if (!mb || qty < mb.n) return price;
+  const deals = Math.floor(qty / mb.n), rest = qty % mb.n;
+  const dealTotal = mb.total != null ? mb.total : price * mb.pay;
+  return Math.min(price, (deals * dealTotal + rest * price) / qty);
+}
+
+// How much is in the pack, in the unit price's measure (kg, ltr, ea...):
+// price ÷ unit price (both are after any offer, so the ratio holds).
+export function packSize(p) {
+  return p.unit && p.price ? Number(p.price) / Number(p.unit) * (Number(p.per) || 1) : null;
+}
+
+// Price per kg (or litre, or each) when buying `qty`, multibuys included.
+export function unitCost(p, qty = 1) {
+  const size = packSize(p);
+  return size ? eachPrice(p, qty) / size : null;
+}
+
+// Words to search for a product we already know by name: drops the store
+// brand, range names, pack sizes and counts, so similar products come up too.
+export function searchTerms(name = '') {
+  return String(name)
+    .replace(/\(.*?\)/g, ' ')
+    .replace(/\b(sainsbury'?s|so organic|taste the difference|by sainsbury'?s|stamford street co\.?|be good to yourself)\b/gi, ' ')
+    .replace(/\b\d+\s*[x×]\s*\d+(\.\d+)?\s*(kg|g|ml|l)?\b/gi, ' ')
+    .replace(/\b\d+(\.\d+)?\s*(x\s*\d+(\.\d+)?\s*)?(kg|g|ml|l|ltr|cl|pint|pints|pk|pack|ea)\b/gi, ' ')
+    .replace(/(^|\s)[x×]\s?\d+\b/gi, ' ')
+    .replace(/[,|]/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
+
+// Choose the cheapest acceptable product for a line. `ref` is the product the
+// line would otherwise get (the usual, or the search's top match); `others`
+// are products judged to be the same thing. Only ones in the same measure and
+// a similar pack size (75%–135% of ref) are compared, so the line's quantity
+// still means the same amount of food. A swap needs to save at least 3% and
+// 10p across the line. Returns { product, saving } or null to keep ref.
+export function cheapestSwap(ref, others, qty = 1) {
+  const refCost = unitCost(ref, qty), refSize = packSize(ref);
+  if (!refCost || !refSize || ref.catchweight) return null;
+  let best = null;
+  for (const p of others) {
+    if (!p || String(p.uid) === String(ref.uid) || p.available === false || p.catchweight || p.measure !== ref.measure) continue;
+    const size = packSize(p), cost = unitCost(p, qty);
+    if (!size || !cost || size < refSize * 0.75 || size > refSize * 1.35) continue;
+    if (!best || cost < best.cost) best = { p, cost };
+  }
+  if (!best || best.cost > refCost * 0.97) return null;
+  const saving = Math.round((refCost - best.cost) * refSize * qty * 100) / 100;
+  return saving >= 0.1 ? { product: best.p, saving } : null;
 }

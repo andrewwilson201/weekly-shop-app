@@ -210,3 +210,38 @@ export async function claudeUsual(asks) {
   const ok = new Map(asks.map(a => [a.key, new Set(a.candidates.map(c => String(c.u)))]));
   return Object.fromEntries((out.picks || []).filter(p => p.uid && ok.get(p.key)?.has(String(p.uid))).map(p => [p.key, String(p.uid)]));
 }
+
+// Cheaper swaps: for each basket line, which of the shop's search results are
+// the same thing as the product it would get (the family's usual, or the
+// search's top match when there's no usual). Claude only judges "same thing";
+// the prices are compared in code (js/plan.js cheapestSwap), so it isn't shown
+// them. Returns { key: [uid, ...] }.
+const SWAP_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['lines'],
+  properties: { lines: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['key', 'same'],
+    properties: { key: { type: 'string' }, same: { type: 'array', items: { type: 'string' }, description: 'uids of the options that would do just as well as the current product' } } } } },
+};
+export async function claudeSwaps(asks, notes = '') {
+  if (!asks.length) return {};
+  if (process.env.CLAUDE_FAKE) return Object.fromEntries(asks.map(a => [a.key, a.options.filter(o => /cheaper/i.test(o.n)).map(o => o.u)]));
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const response = await new Anthropic().beta.messages.create({
+    model: MODEL,
+    max_tokens: 16000,
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: SWAP_SCHEMA } },
+    system: `You help a family save money on their Sainsbury's shop without them noticing a worse product. Each line has the product it would get ("current": their usual, or the top search match) and other options from the shop. List the options that would do just as well, so the cheapest of those can be bought instead.
+
+An option counts only if it is the same kind of product, for the same use, and keeps every quality the current one has: organic stays organic, free range stays free range, higher welfare, outdoor bred, Fairtrade, British, MSC stay; same cut and form (breast fillets not thighs or mini fillets, a block not slices or grated, fresh not frozen or long life, whole not diced); same fat level, flavour, variety and dietary type (lactose free, gluten free, wholewheat). Pack size doesn't matter here (it's checked separately).
+
+Brand: switching between Sainsbury's own label and a well known brand is fine for basic foods where the brand makes little difference (tinned tomatoes, pasta, rice, flour, sugar, plain cheese, milk, frozen veg, bin bags, foil). Keep the brand when it is the point of the product or the family clearly sticks with it (Lurpak, Heinz beans, branded cereals and snacks the children have, toiletries, cleaning products, nappies, coffee, wine). Taste the Difference stays Taste the Difference or an equally premium brand. Never go to a budget range (Stamford Street, Hubbard's, KTC style value lines) from a standard or premium product, unless the current product is already a budget one.
+
+The household's own notes come first: anything they say to always buy, or never swap, wins. If in doubt, leave an option out. It is fine to return an empty list.`,
+    messages: [{ role: 'user', content: `${notes ? `Household notes:\n${notes}\n\n` : ''}Lines (JSON):\n${JSON.stringify(asks)}\n\nReturn every key.` }],
+  });
+  if (response.stop_reason === 'refusal' || response.stop_reason === 'max_tokens') throw new Error(`Claude stopped: ${response.stop_reason}`);
+  const out = JSON.parse(response.content.filter(b => b.type === 'text').map(b => b.text).join(''));
+  const ok = new Map(asks.map(a => [a.key, new Set(a.options.map(o => String(o.u)))]));
+  return Object.fromEntries((out.lines || []).filter(l => ok.has(l.key)).map(l => [l.key, (l.same || []).map(String).filter(u => ok.get(l.key).has(u))]));
+}
