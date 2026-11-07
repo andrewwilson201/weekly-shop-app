@@ -1,5 +1,5 @@
 import * as S from './store.js';
-import { weekId, iso, addDays, buildShop, stapleStatus, pickIdeas, awayOn, awayWeek, skipRule } from './plan.js';
+import { weekId, iso, addDays, buildShop, stapleStatus, pickIdeas, awayOn, awayWeek, skipRule, matchUsual } from './plan.js';
 import { icon, tile, avatar } from './ui.js';
 
 const $main = document.getElementById('main');
@@ -254,11 +254,43 @@ function viewList() {
   for (const it of items) {
     html += `<li><input type="checkbox" class="check round" data-change="toggleItem" data-id="${it.id}" ${it.done ? 'checked' : ''} aria-label="Got it">
       <span class="grow"><span class="name ${it.done ? 'strike' : ''}">${esc(it.text)}${it.qty > 1 ? `<span class="qty">×${it.qty}</span>` : ''}</span>
-      <span class="meta">Added by ${esc(it.addedBy?.name?.split(' ')[0] || 'someone')}${it.orderedIn ? ' · in an order' : ''}</span></span>
+      <span class="meta">${it.done ? '' : productLine(it)}Added by ${esc(it.addedBy?.name?.split(' ')[0] || 'someone')}${it.orderedIn ? ' · in an order' : ''}</span></span>
       <button class="iconbtn sm" data-act="delItem" data-id="${it.id}" aria-label="Remove">${icon('x')}</button></li>`;
+    if (keep.choose === it.id && !it.done) html += chooser(it);
   }
   return html + `</ul></div>`;
 }
+
+// "Your usual": which product a typed item becomes. A product picked by hand
+// wins; "anyProduct" means let Sainsbury's search pick; otherwise the best
+// match from past orders.
+function usual(it) {
+  if (it.uid) return { uid: it.uid, name: it.product || it.text, picked: true };
+  if (it.anyProduct) return null;
+  const m = matchUsual(it.text, st.products, 1)[0];
+  return m ? { uid: m.u, name: m.n } : null;
+}
+function productLine(it) {
+  const u = usual(it);
+  const change = `<button class="link" data-act="chooseProduct" data-id="${it.id}">Change</button>`;
+  if (u) return `<span class="usual">${u.picked ? 'Ordering' : 'Your usual'}: ${esc(u.name)} · ${change}</span>`;
+  const any = matchUsual(it.text, st.products, 1).length;
+  return `<span class="usual">Sainsbury's top match${any ? ` · ${change}` : ''}</span>`;
+}
+function chooser(it) {
+  const opts = matchUsual(it.text, st.products, 8);
+  const cur = usual(it)?.uid;
+  return `<li class="chooser"><span class="grow"><span class="meta">Pick the product to order</span><ul class="list compact">` +
+    opts.map(p => `<li><button class="pick ${String(p.u) === String(cur) ? 'on' : ''}" data-act="pickProduct" data-id="${it.id}" data-uid="${esc(p.u)}"><span class="grow"><span class="name">${esc(p.n)}</span><span class="meta">Bought ${p.c === 1 ? 'once' : `${p.c} times`}, last ${esc(fmtDay(p.l, { day: 'numeric', month: 'short', year: 'numeric' }))}</span></span>${String(p.u) === String(cur) ? icon('check') : ''}</button></li>`).join('') +
+    `<li><button class="pick ${cur ? '' : 'on'}" data-act="pickProduct" data-id="${it.id}" data-uid=""><span class="grow"><span class="name">Something new</span><span class="meta">Let Sainsbury's search pick its top match</span></span>${cur ? '' : icon('check')}</button></li></ul></span></li>`;
+}
+actions.chooseProduct = el => { keep.choose = keep.choose === el.dataset.id ? null : el.dataset.id; render(); };
+actions.pickProduct = el => {
+  const uid = el.dataset.uid;
+  const p = st.products.find(x => String(x.u) === uid);
+  keep.choose = null;
+  run(() => S.updateH(['list', el.dataset.id], uid ? { uid, product: p?.n || '', anyProduct: S.deleteField() } : { uid: S.deleteField(), product: S.deleteField(), anyProduct: true }));
+};
 actions.addItem = f => {
   const text = f.text.value.trim(); if (!text) return;
   const m = text.match(/^(.*?)\s*(?:x|×)\s*(\d+)$/i);
@@ -272,10 +304,11 @@ actions.clearDone = () => run(() => S.batchH(st.list.filter(i => i.done).map(i =
 // ---------- Shop ----------
 function shopLines() {
   const w = week() || {};
-  return buildShop({ staples: st.staples, meals: pickedMeals(), list: st.list, delivery: w.deliveryDate || addDays(today(), 2), extras: w.extras || {} });
+  const list = st.list.map(it => { const u = usual(it); return u ? { ...it, uid: u.uid, product: u.name } : it; });
+  return buildShop({ staples: st.staples, meals: pickedMeals(), list, delivery: w.deliveryDate || addDays(today(), 2), extras: w.extras || {} });
 }
 const lineRow = l => `<li><input type="checkbox" class="check" checked data-change="lineOff" data-id="${esc(l.key)}" aria-label="Include">
-  <span class="grow"><span class="name">${esc(l.name)}${l.qty > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span>${l.for ? `<span class="meta">${esc(l.for.join(' · '))}</span>` : ''}</span></li>`;
+  <span class="grow"><span class="name">${esc(l.name)}${l.qty > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span>${l.product ? `<span class="meta">${esc(l.product)}</span>` : ''}${l.for ? `<span class="meta">${esc(l.for.join(' · '))}</span>` : ''}</span></li>`;
 function viewShop() {
   const w = week();
   const order = activeOrder();
@@ -596,6 +629,7 @@ actions.importFile = el => run(async () => {
   const file = el.files[0]; if (!file) return;
   const seed = JSON.parse(await file.text());
   const ops = [];
+  if (seed.products) ops.push(['set', ['meta', 'products'], { items: seed.products }]);
   for (const s of seed.staples || []) ops.push(['set', ['staples', String(s.product_uid)], s]);
   const byName = new Map(st.meals.map(m => [m.name.toLowerCase(), m]));
   for (const m of seed.meals || []) {

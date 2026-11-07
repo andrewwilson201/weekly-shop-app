@@ -33,7 +33,7 @@ if (emulator) {
 
 export { serverTimestamp, deleteField, arrayUnion };
 
-const state = { user: null, profile: null, household: null, meals: [], list: [], staples: [], weeks: {}, orders: [], imports: [], ready: false };
+const state = { user: null, profile: null, household: null, meals: [], list: [], staples: [], products: [], weeks: {}, orders: [], imports: [], ready: false };
 const listeners = new Set();
 let unsubs = [];
 const emit = () => listeners.forEach(fn => fn(state));
@@ -60,7 +60,7 @@ export async function testSignIn(name, email) {
 getRedirectResult(auth).catch(() => {});
 onAuthStateChanged(auth, async (u) => {
   unsubs.forEach(f => f()); unsubs = [];
-  Object.assign(state, { user: u, profile: null, household: null, meals: [], list: [], staples: [], weeks: {}, orders: [], imports: [], ready: !u });
+  Object.assign(state, { user: u, profile: null, household: null, meals: [], list: [], staples: [], products: [], weeks: {}, orders: [], imports: [], ready: !u });
   emit();
   if (!u) return;
   unsubs.push(onSnapshot(doc(db, 'shopUsers', u.uid), snap => {
@@ -85,6 +85,10 @@ function watchHousehold(hid) {
   unsubs.push(coll('meals', 'meals'));
   unsubs.push(coll('list', 'list', ['addedAt', 'asc']));
   unsubs.push(coll('staples', 'staples'));
+  // Everything bought before, for matching typed list items to "your usual".
+  unsubs.push(onSnapshot(doc(db, h('meta', 'products')), snap => {
+    state.products = snap.exists() ? snap.data().items || [] : []; emit();
+  }, () => {}));
   unsubs.push(onSnapshot(query(collection(db, h('weeks')), orderBy('createdAt', 'desc'), limit(8)), snap => {
     state.weeks = Object.fromEntries(snap.docs.map(d => [d.id, { id: d.id, ...d.data() }])); emit();
   }));

@@ -415,3 +415,18 @@ details.mini .meta { margin-top: 4px; }
 .seg a { flex: 1; text-align: center; padding: 8px 10px; border-radius: 9px; font: 600 14px/1.2 var(--sans); color: var(--muted); text-decoration: none; }
 .seg a:hover { text-decoration: none; color: var(--text); }
 .seg a.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow-1); }
+
+/* List: which product a typed item becomes */
+.list .usual { display: block; color: var(--text-2, var(--muted)); }
+.list .usual .link { font-size: 13px; }
+.list > li.chooser { padding: 0 16px 12px 52px; display: block; }
+.list > li.chooser::before { display: none; }
+.chooser > .grow > .meta { margin: 0 0 6px; }
+.chooser .list { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.chooser .list > li { padding: 0; min-height: 0; }
+.chooser .list > li + li::before { left: 0; }
+.pick { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; padding: 10px 12px; color: inherit; font: inherit; cursor: pointer; }
+.pick:hover { background: var(--surface-2); }
+.pick .name { font-size: 15px; }
+.pick.on .name { font-weight: 600; }
+.pick svg { width: 18px; height: 18px; flex: none; color: var(--ok-text, var(--accent)); }

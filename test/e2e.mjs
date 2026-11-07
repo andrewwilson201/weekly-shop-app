@@ -89,6 +89,23 @@ if (seed) {
   await a.screenshot({ path: `${SHOTS}/05-staples.png`, fullPage: true });
 }
 
+// "Your usual": typed list items match products bought before
+await a.goto(`${BASE}#/settings`);
+await a.setInputFiles('input[type=file]', 'test/fixtures/products.json');
+await a.waitForSelector('text=Imported');
+await a.goto(`${BASE}#/list`);
+await a.fill('input[name=text]', 'shampoo'); await a.press('input[name=text]', 'Enter');
+await a.fill('input[name=text]', 'shower gel'); await a.press('input[name=text]', 'Enter');
+await a.waitForSelector('text=Your usual: Head & Shoulders');
+assert(await a.isVisible('text=Your usual: Old Brand Rose Body Wash'), 'shower gel matches a body wash bought before');
+assert(await a.isVisible("li:has-text('Olive oil') >> text=Sainsbury's top match"), 'item never bought before is left to the search');
+await a.click("li:has-text('shampoo') >> button:has-text('Change')");
+await a.waitForSelector('.chooser');
+await a.screenshot({ path: `${SHOTS}/04b-usual.png`, fullPage: true });
+await a.click('.chooser button:has-text("Aussie")');
+await a.waitForSelector('text=Ordering: Aussie Miracle Moist');
+assert(true, 'a different past product can be picked');
+
 // Recipe from a link (the worker reads test/fixtures/recipe.html instead of the web)
 await b.goto(`${BASE}#/meals`);
 await b.fill('input[name=url]', 'https://example.com/recipes/easy-chicken-fajitas');
@@ -138,7 +155,7 @@ await a.click('button:has-text("Send to Sainsbury")');
 await a.waitForSelector('text=Starting the order helper');
 
 // Worker with the pretend shop
-const worker = spawn(process.execPath, ['worker/run.mjs'], { env: { ...process.env, SAINSBURYS_FAKE: '1', SAINSBURYS_EMAIL: 'x', SAINSBURYS_PASSWORD: 'y', FIRESTORE_EMULATOR_HOST: 'localhost:8081', WORKER_MINUTES: '5' }, stdio: 'inherit' });
+const worker = spawn(process.execPath, ['worker/run.mjs'], { env: { ...process.env, SAINSBURYS_FAKE: '1', CLAUDE_FAKE: '1', SAINSBURYS_EMAIL: 'x', SAINSBURYS_PASSWORD: 'y', FIRESTORE_EMULATOR_HOST: 'localhost:8081', WORKER_MINUTES: '5' }, stdio: 'inherit' });
 const workerDone = new Promise(r => worker.on('exit', r));
 
 await b.goto(`${BASE}#/order`);
@@ -151,6 +168,7 @@ await a.click('.slots button >> nth=0');
 await a.waitForSelector('button:has-text("Approve £")', { timeout: 30000 });
 await a.screenshot({ path: `${SHOTS}/09-review.png`, fullPage: true });
 assert(await a.isVisible('text=not added'), 'unfound item reported');
+assert(await a.isVisible('text=organic chicken breast'), 'meal ingredient uses the usual product (organic chicken)');
 await a.click('button:has-text("Approve")');
 await a.waitForSelector('text=Order placed', { timeout: 30000 });
 await a.screenshot({ path: `${SHOTS}/10-placed.png`, fullPage: true });
@@ -159,6 +177,7 @@ await workerDone;
 
 await a.goto(`${BASE}#/list`); await sleep(1000);
 assert(!(await a.isVisible('text=Olive oil')), 'ordered list items cleared');
+assert(!(await a.isVisible('text=shower gel')), 'list item whose usual was gone was ordered via a search');
 assert(await a.isVisible('text=Something that has nothing'), 'unfound list item kept');
 await a.goto(`${BASE}#/week`); await sleep(800);
 assert(await a.isVisible('text=Ordered'), 'week shows as ordered');

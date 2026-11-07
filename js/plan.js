@@ -92,12 +92,12 @@ export function buildShop({ staples = [], meals = [], list = [], delivery, extra
       const key = `meal:${m.id}:${ing.item}`;
       // Store-cupboard things (oil, salt, stock...) only when ticked.
       if (extras[key] === false || (ing.pantry && extras[key] !== true)) continue;
-      put({ key, source: 'meal', uid: ing.uid || null, search: ing.search || ing.item, name: ing.item, qty: ing.qty || 1, for: [m.name] });
+      put({ key, source: 'meal', uid: ing.uid || null, search: ing.search || ing.item, name: ing.item, ...(ing.product ? { product: ing.product, usual: true } : {}), qty: ing.qty || 1, for: [m.name] });
     }
   }
   for (const it of list) {
     if (it.done) continue;
-    put({ key: `list:${it.id}`, source: 'list', uid: it.uid || null, search: it.text, name: it.text, qty: it.qty || 1, listId: it.id });
+    put({ key: `list:${it.id}`, source: 'list', uid: it.uid || null, search: it.text, name: it.text, ...(it.product ? { product: it.product } : {}), qty: it.qty || 1, listId: it.id });
   }
   return lines;
 }
@@ -119,4 +119,51 @@ export function learnStaple(s, delivery, qty = 1) {
     }
   }
   return update;
+}
+
+// "Your usual": match a typed list item ("shampoo", "shower gel x2") to the
+// products the household has bought before. products is [{ u: uid, n: name,
+// c: times bought, l: last bought 'YYYY-MM-DD' }]. Every typed word must be in
+// the product name (plurals and a few common other names allowed). The usual
+// is the most recently bought of those bought at least twice, so a brand you
+// switched to beats one you bought a lot years ago; failing that, the most
+// recent. Returns the matches in that order (best first), at most `max`.
+const SAME = [['shower gel', 'body wash'], ['hand soap', 'hand wash'], ['loo roll', 'toilet tissue', 'toilet roll'], ['washing up liquid', 'washing up', 'dish soap'], ['nappies', 'nappy'], ['loo cleaner', 'toilet cleaner'], ['softener', 'fabric conditioner'], ['clingfilm', 'cling film'], ['tinfoil', 'foil'], ['bin bag', 'bin liner', 'refuse sack']];
+const words = s => s.toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean);
+const stem = w => w.length > 4 && w.endsWith('ies') ? w.slice(0, -3) + 'y' : w.length > 3 && /(ches|shes|sses|xes|oes)$/.test(w) ? w.slice(0, -2) : w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w;
+function variants(text) {
+  const t = ' ' + words(text).join(' ') + ' ';
+  const out = [t];
+  for (const g of SAME) for (const a of g) if (t.includes(` ${a} `)) for (const b of g) if (b !== a) out.push(t.replace(` ${a} `, ` ${b} `));
+  return out.map(v => v.trim().split(' ').map(stem));
+}
+export function matchUsual(text, products = [], max = 6) {
+  if (!text || !products.length) return [];
+  const qs = variants(text);
+  const hits = products.filter(p => {
+    const have = new Set(words(p.n || '').map(stem));
+    return qs.some(q => q.length && q.every(w => have.has(w)));
+  });
+  const rank = p => [(p.c || 0) >= 2 ? 1 : 0, p.l || ''];
+  hits.sort((a, b) => { const [ra, la] = rank(a), [rb, lb] = rank(b); return rb - ra || lb.localeCompare(la) || (b.c || 0) - (a.c || 0); });
+  return hits.slice(0, max);
+}
+
+// Add a bought line to the products list (for "your usual" next time).
+export function recordBought(products = [], uid, name, date) {
+  const out = products.slice();
+  const i = out.findIndex(p => String(p.u) === String(uid));
+  if (i >= 0) out[i] = { ...out[i], n: name || out[i].n, c: (out[i].c || 0) + 1, l: date > (out[i].l || '') ? date : out[i].l };
+  else out.push({ u: String(uid), n: name || '', c: 1, l: date });
+  return out;
+}
+
+// Past products that might be a recipe ingredient, for Claude to choose from:
+// ones matching all its words, then ones matching its last word ("Baby
+// potatoes" also offers the other potatoes they buy).
+export function usualCandidates(item, products = [], max = 15) {
+  const w = words(item);
+  const out = [...matchUsual(item, products, max)];
+  if (w.length > 1) for (const p of matchUsual(w[w.length - 1], products, max)) if (!out.includes(p)) out.push(p);
+  return out.slice(0, max);
 }

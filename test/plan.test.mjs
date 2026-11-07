@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { stapleStatus, buildShop, weekId, awayWeek, awayOn } from '../js/plan.js';
+import { stapleStatus, buildShop, weekId, awayWeek, awayOn, matchUsual, recordBought } from '../js/plan.js';
 
 test('staple due rule matches build-staples.py', () => {
   assert.equal(stapleStatus({ rule: 'every_week' }, '2026-11-10'), 'add');
@@ -70,4 +70,32 @@ test('staples re-learn how often they are bought and log each purchase', async (
   assert.match(u.freqNote, /every 20 days/);
   const weekly = learnStaple({ rule: 'every_week', every_days: 7, last_bought: '2026-10-01' }, '2026-11-05');
   assert.equal(weekly.every_days, undefined);
+});
+
+test('matchUsual finds the usual product from past orders', () => {
+  const P = [
+    { u: '1', n: 'Aussie Miracle Moist Shampoo 300ml', c: 4, l: '2024-05-20' },
+    { u: '2', n: 'Head & Shoulders Classic Clean Anti-Dandruff Shampoo 400ml', c: 2, l: '2026-07-02' },
+    { u: '3', n: 'Radox 2 in 1 Shower Gel & Shampoo', c: 1, l: '2026-09-01' },
+    { u: '4', n: 'Baylis & Harding Rose Natural Body Wash 500ml', c: 11, l: '2026-08-25' },
+    { u: '5', n: "Sainsbury's Fairtrade Bananas x8", c: 46, l: '2026-09-24' },
+    { u: '6', n: 'Andrex Complete Clean Toilet Rolls x9', c: 39, l: '2026-09-24' },
+  ];
+  // Bought twice or more beats a one-off, then the most recent wins.
+  assert.deepEqual(matchUsual('shampoo', P).map(p => p.u), ['2', '1', '3']);
+  assert.equal(matchUsual('Shower gel', P)[0].u, '4'); // other names for the same thing
+  assert.equal(matchUsual('banana', P)[0].u, '5');     // plurals
+  assert.equal(matchUsual('bananas', P)[0].u, '5');
+  assert.equal(matchUsual('loo roll', P)[0].u, '6');
+  assert.deepEqual(matchUsual('ketchup', P), []);
+  assert.deepEqual(matchUsual('shampoo', []), []);
+});
+
+test('recordBought counts a purchase and adds new products', () => {
+  let P = [{ u: '1', n: 'Old name', c: 2, l: '2026-01-01' }];
+  P = recordBought(P, 1, 'New name', '2026-11-10');
+  assert.deepEqual(P, [{ u: '1', n: 'New name', c: 3, l: '2026-11-10' }]);
+  P = recordBought(P, '9', 'Shampoo', '2026-11-10');
+  assert.equal(P.length, 2);
+  assert.deepEqual(P[1], { u: '9', n: 'Shampoo', c: 1, l: '2026-11-10' });
 });

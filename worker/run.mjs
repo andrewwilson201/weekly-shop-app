@@ -16,6 +16,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { FakeSainsburys } from './fake.mjs';
 import { makeJobs } from './jobs.mjs';
 import { notify } from './notify.mjs';
+import { claudeUsual } from './ideas-claude.mjs';
 
 // SAINSBURYS_FAKE=1 swaps in a pretend shop, for testing the app end to end.
 // The real one loads Playwright, so it's imported only when needed.
@@ -25,7 +26,7 @@ async function makeShop(opts) {
   const { Sainsburys: Real } = await import('./sainsburys.mjs');
   return new Real(opts);
 }
-import { pickIdeas, weekId, iso, daysBetween, awayWeek, SKIPS_TO_SUGGEST, learnStaple } from '../js/plan.js';
+import { pickIdeas, weekId, iso, daysBetween, awayWeek, SKIPS_TO_SUGGEST, learnStaple, recordBought, usualCandidates } from '../js/plan.js';
 
 const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
 initializeApp(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: process.env.GCLOUD_PROJECT || 'weekly-shop-177b1' }
@@ -166,6 +167,7 @@ async function processOrder({ h, ref }) {
     const before = await shop.basket();
     if (before?.items?.length) await log(`The basket already had ${before.items.length} items; they're kept`);
     const lines = (await read()).lines || [];
+    await pickUsual(h, lines, log);
     for (const line of lines) {
       try {
         let uid = line.uid;
@@ -174,7 +176,17 @@ async function processOrder({ h, ref }) {
           if (!hits.length) { line.result = 'not_found'; continue; }
           uid = hits[0].uid; line.uid = uid; line.product = hits[0].name;
         }
-        await shop.add(uid, line.qty || 1, slotDate);
+        try {
+          await shop.add(uid, line.qty || 1, slotDate);
+        } catch (e) {
+          // A usual product from a past order may have been discontinued: fall back to a search.
+          if (!((line.source === 'list' || line.usual) && e.status === 400 && line.search)) throw e;
+          const hits = (await shop.search(line.search)).filter(p => p.available && String(p.uid) !== String(uid));
+          if (!hits.length) throw e;
+          line.uid = hits[0].uid; line.product = hits[0].name;
+          await shop.add(line.uid, line.qty || 1, slotDate);
+          await log(`${line.name}: the usual one wasn't available, so it's ${hits[0].name}`);
+        }
         line.result = 'added';
       } catch (e) {
         line.result = e.status === 400 ? 'unavailable' : `error ${e.status || e.message}`;
@@ -241,6 +253,28 @@ function londonDate(t) {
   return new Date(t).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
 }
 
+// Meal ingredients get "your usual" product: Claude picks from what the
+// household bought before (free range chicken if that's what they buy).
+// Anything it can't match is left to the shop's search.
+async function pickUsual(h, lines, log) {
+  const products = (await h.ref.collection('meta').doc('products').get()).data()?.items || [];
+  const asks = lines.filter(l => l.source === 'meal' && !l.uid)
+    .map(l => ({ key: l.key, item: l.name, candidates: usualCandidates(l.name, products).map(({ u, n, c, l: last }) => ({ u, n, c, l: last })) }))
+    .filter(a => a.candidates.length);
+  if (!asks.length) return;
+  let picks;
+  try { picks = await claudeUsual(asks); } catch (e) { await log(`Couldn't pick usual products: ${e.message}`); return; }
+  if (!picks) return;
+  const byUid = new Map(products.map(p => [String(p.u), p]));
+  for (const l of lines) {
+    const uid = picks[l.key];
+    if (!uid) continue;
+    Object.assign(l, { uid, product: byUid.get(uid)?.n || '', usual: true });
+  }
+  const n = Object.keys(picks).length;
+  if (n) await log(`Picked your usual product for ${n} meal ingredient${n === 1 ? '' : 's'}`);
+}
+
 // Record what was bought: staples' last_bought, meals chosen, list items done.
 async function afterPlaced(h, order, lines, delivery) {
   const b = db.batch();
@@ -262,8 +296,25 @@ async function afterPlaced(h, order, lines, delivery) {
     const skips = (s.skips || 0) + 1;
     b.set(ref, { skips, skipped_on: delivery, ...(skips === SKIPS_TO_SUGGEST ? { learned: `Left out ${skips} times in a row, so it's a suggestion now` } : {}) }, { merge: true });
   }
+  // Remember the usual products picked for meal ingredients, so next time they show in the shop.
+  const mealPicks = new Map();
+  for (const l of lines) if (l.source === 'meal' && l.usual && l.result === 'added') {
+    const [, id, ...rest] = l.key.split(':'); const item = rest.join(':');
+    if (!mealPicks.has(id)) mealPicks.set(id, new Map());
+    mealPicks.get(id).set(item, { uid: l.uid, product: l.product });
+  }
+  for (const [id, picks] of mealPicks) {
+    const ref = h.ref.collection('meals').doc(id);
+    const m = (await ref.get()).data();
+    if (m?.ingredients) b.set(ref, { ingredients: m.ingredients.map(g => picks.has(g.item) ? { ...g, ...picks.get(g.item) } : g) }, { merge: true });
+  }
   for (const id of order.meals || []) b.set(h.ref.collection('meals').doc(id), { timesChosen: FieldValue.increment(1), lastChosen: delivery }, { merge: true });
   b.set(h.ref.collection('weeks').doc(order.week), { status: 'ordered', orderedFor: delivery }, { merge: true });
+  // Everything bought joins the products list, so typed list items find "your usual".
+  const pref = h.ref.collection('meta').doc('products');
+  let products = (await pref.get()).data()?.items || [];
+  for (const l of lines) if (l.result === 'added' && l.uid) products = recordBought(products, l.uid, l.product || l.name, delivery);
+  b.set(pref, { items: products }, { merge: true });
   await b.commit();
 }
 

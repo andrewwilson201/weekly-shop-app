@@ -1,7 +1,7 @@
 node_modules/
 *.log
 .firebase/
-seed*.json
+*seed*.json
 test/shots/
 *-debug.log
 functions/shared/
