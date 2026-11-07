@@ -1,6 +1,6 @@
 import * as S from './store.js';
 import { weekId, iso, addDays, buildShop, stapleStatus, pickIdeas, awayOn, awayWeek, skipRule, matchUsual, toCook } from './plan.js';
-import { icon, tile, avatar } from './ui.js';
+import { icon, tile, avatar, MEAL_CATEGORIES, mealCategory, autoCategory, categoryTile } from './ui.js';
 
 const $main = document.getElementById('main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -90,6 +90,13 @@ $main.addEventListener('change', e => {
 });
 // <details data-toggle="key"> remember whether they're open across live re-renders.
 $main.addEventListener('toggle', e => { const el = e.target; if (el.dataset?.toggle) keep[el.dataset.toggle] = el.open; }, true);
+// Open meal categories are remembered until the app is closed, but not the ones a search opened.
+const openCats = new Set();
+$main.addEventListener('toggle', e => {
+  const el = e.target;
+  if (!el.dataset?.cat || el.closest('[data-searching]')) return;
+  if (el.open) openCats.add(el.dataset.cat); else openCats.delete(el.dataset.cat);
+}, true);
 $main.addEventListener('input', e => { const el = e.target; if (el.dataset?.keep) keep[el.dataset.keep] = el.value; if (el.dataset?.filter) applyFilter(el); });
 // Search boxes filter the rows of the list they name, without a re-render.
 function applyFilter(el) {
@@ -99,6 +106,13 @@ function applyFilter(el) {
   root.querySelectorAll('li[data-name]').forEach(li => { li.hidden = !!q && !li.dataset.name.includes(q); });
   // In a grouped list, hide a group whose rows are all filtered out.
   root.querySelectorAll('[data-group]').forEach(g => { g.hidden = !!q && !g.querySelector('li[data-name]:not([hidden])'); });
+  // Collapsed groups open while searching, and go back to how they were after.
+  if (q) root.dataset.searching = '';
+  root.querySelectorAll('details[data-group]').forEach(g => {
+    if (q) { if (g.dataset.wasOpen == null) g.dataset.wasOpen = g.open ? '1' : ''; g.open = !g.hidden; }
+    else if (g.dataset.wasOpen != null) { g.open = g.dataset.wasOpen === '1'; delete g.dataset.wasOpen; }
+  });
+  if (!q) delete root.dataset.searching;
 }
 
 // ---------- sign in & household ----------
@@ -620,9 +634,19 @@ function viewMeals() {
   const inWeek = new Set(week()?.offered || []);
   html += section('All meals', { count: meals.length });
   html += `<div class="search" style="margin-bottom:10px">${icon('search')}<input type="search" placeholder="Search meals" data-keep="mealSearch" data-filter="mealList" aria-label="Search meals"></div>`;
-  html += `<div class="card flush"><ul class="list" id="mealList">` + meals.map(m => `<li class="link-row" data-name="${esc(m.name.toLowerCase())}">${tile(m, 'sm')}<a href="#/meal/${m.id}" class="grow">
+  // Grouped by category, each collapsed until tapped, so a long list stays short.
+  const row = m => `<li class="link-row" data-name="${esc(m.name.toLowerCase())}">${tile(m, 'sm')}<a href="#/meal/${m.id}" class="grow">
       <span class="name">${esc(m.name)}</span><span class="meta">${plural((m.ingredients || []).length, 'ingredient')}${m.ingredientsBy === 'claude' ? ' (from Claude)' : ''}${m.timesChosen ? ` · picked ${m.timesChosen}×` : ''}${m.lastChosen ? `, last ${fmtDay(m.lastChosen)}` : ''}</span></a>
-      ${week() && !inWeek.has(m.id) ? `<button class="btn small outline" data-act="offer" data-id="${m.id}">Add to this week</button>` : inWeek.has(m.id) ? '<span class="pill ok">In this week\'s ideas</span>' : ''}</li>`).join('') + `</ul></div>`;
+      ${week() && !inWeek.has(m.id) ? `<button class="btn small outline" data-act="offer" data-id="${m.id}">Add to this week</button>` : inWeek.has(m.id) ? '<span class="pill ok">In this week\'s ideas</span>' : ''}</li>`;
+  html += `<div id="mealList" class="cat-list">`;
+  for (const [key, label] of MEAL_CATEGORIES) {
+    const g = meals.filter(m => mealCategory(m) === key);
+    if (!g.length) continue;
+    html += `<details class="card flush disclosure cat" data-group="${key}" data-cat="${key}"${openCats.has(key) ? ' open' : ''}>
+      <summary>${categoryTile(key, 'sm')}<span class="grow">${label}</span><span class="count">${g.length}</span></summary>
+      <ul class="list">${g.map(row).join('')}</ul></details>`;
+  }
+  html += `</div>`;
   const archived = st.meals.filter(m => m.archived);
   if (archived.length) html += `<details class="card flush disclosure" style="margin-top:12px"><summary>Removed meals <span class="count">${archived.length}</span></summary><ul class="list">${archived.map(m => `<li><span class="grow">${esc(m.name)}</span><button class="btn small outline" data-act="unarchive" data-id="${m.id}">Restore</button></li>`).join('')}</ul></details>`;
   return html;
@@ -670,6 +694,9 @@ function viewMeal() {
       <label class="field">Name<input type="text" name="name" value="${esc(m.name)}" required data-keep="mealName"></label>
       ${m.source ? `<p class="small muted">${icon('link')} From <a href="${esc(m.source)}" target="_blank" rel="noopener">${esc(m.source.replace(/^https?:\/\/(www\.)?/, '').split('/')[0])}</a></p>` : ''}
       ${arg === 'new' ? '' : `<p class="small"><a href="#/recipe/${esc(m.id)}">${icon('book')} View the recipe and method</a></p>`}
+      <label class="field">Category<select name="category" data-keep="mealCat">
+        <option value="">Automatic${m.name ? ` (${MEAL_CATEGORIES.find(c => c[0] === autoCategory(m))[1]})` : ''}</option>
+        ${MEAL_CATEGORIES.map(([k, l]) => `<option value="${k}"${m.category === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="field">Ingredients<span class="hint">One per line. Add “x2” for two, “(cupboard)” for things you usually have, and “| search words” to pick the exact Sainsbury's product.</span>
         <textarea name="ingredients" rows="10" placeholder="Chicken thighs x2&#10;Lemons | sainsburys unwaxed lemons" data-keep="mealIng">${esc(lines)}</textarea></label>
       ${m.ingredientsBy === 'claude' ? `<p class="small muted">${icon('sparkle')} Ingredients suggested by Claude. Check them over.</p>` : ''}
@@ -687,10 +714,11 @@ actions.saveMeal = f => {
     return { item, qty: m ? +m[2] : 1, search: search || item, ...(pantry ? { pantry: true } : {}) };
   });
   const data = { name: f.name.value.trim(), ingredients };
+  const category = f.category.value;
   keep = {};
   run(async () => {
-    if (arg === 'new') await S.addH(['meals'], { ...data, timesChosen: 0, createdAt: S.serverTimestamp() });
-    else await S.updateH(['meals', arg], data);
+    if (arg === 'new') await S.addH(['meals'], { ...data, ...(category ? { category } : {}), timesChosen: 0, createdAt: S.serverTimestamp() });
+    else await S.updateH(['meals', arg], { ...data, category: category || S.deleteField() });
     location.hash = '#/meals';
   }, 'Saved');
 };

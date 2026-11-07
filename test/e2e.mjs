@@ -107,6 +107,32 @@ await a.click('.chooser button:has-text("Aussie")');
 await a.waitForSelector('text=Ordering: Aussie Miracle Moist');
 assert(true, 'a different past product can be picked');
 
+// Meals are grouped into categories, collapsed until tapped; search opens the matching ones
+await b.goto(`${BASE}#/meals`);
+await b.waitForSelector('details.cat');
+assert(await b.$$eval('details.cat[open]', d => d.length) === 0, 'meal categories start collapsed');
+assert(!(await b.isVisible('text=Garlic king prawn linguine')), 'meals are hidden inside their category');
+await b.screenshot({ path: `${SHOTS}/05a-meal-groups.png`, fullPage: true });
+await b.click('details.cat[data-cat=pasta] > summary');
+await b.waitForSelector('text=Garlic king prawn linguine');
+assert(true, 'tapping a category shows its meals');
+await b.screenshot({ path: `${SHOTS}/05a2-meal-group-open.png`, fullPage: true });
+await b.fill('input[data-filter=mealList]', 'pie');
+await b.waitForSelector('text=Chicken, leek and mushroom pie');
+assert(await b.isHidden('details.cat[data-cat=pasta]'), 'search hides categories with no match and opens the rest');
+await b.screenshot({ path: `${SHOTS}/05a3-meal-search.png`, fullPage: true });
+await b.fill('input[data-filter=mealList]', '');
+await b.waitForSelector('details.cat[data-cat=curry]:not([open])', { state: 'attached' });
+assert(await b.$eval('details.cat[data-cat=pasta]', d => d.open), 'clearing the search puts categories back as they were');
+await b.click('details.cat[data-cat=fakeaway] > summary');
+await b.click('text=Homemade pizza night');
+await b.selectOption('select[name=category]', 'veg');
+await b.click('button:has-text("Save")');
+await b.waitForSelector('details.cat[data-cat=veg]');
+await b.click('details.cat[data-cat=veg] > summary');
+await b.waitForSelector('details.cat[data-cat=veg] >> text=Homemade pizza night');
+assert(true, 'a meal can be moved to another category');
+
 // Recipe from a link (the worker reads test/fixtures/recipe.html instead of the web)
 await b.goto(`${BASE}#/meals`);
 await b.fill('input[name=url]', 'https://example.com/recipes/easy-chicken-fajitas');
