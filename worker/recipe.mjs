@@ -89,7 +89,7 @@ export function extractRecipe(html, url = '') {
 }
 
 export async function fetchRecipe(url) {
-  const res = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36', accept: 'text/html,application/xhtml+xml', 'accept-language': 'en-GB,en;q=0.9' }, redirect: 'follow' });
+  const res = await fetch(url, { signal: AbortSignal.timeout(20000), headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36', accept: 'text/html,application/xhtml+xml', 'accept-language': 'en-GB,en;q=0.9' }, redirect: 'follow' });
   if (!res.ok) throw new Error(`The site said ${res.status}.`);
   const html = await res.text();
   const r = extractRecipe(html, url);

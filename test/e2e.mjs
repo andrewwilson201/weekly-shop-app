@@ -129,12 +129,26 @@ await a.goto(`${BASE}#/week`); await a.waitForSelector('.meal');
 const picksBefore = (await a.$$('.meal.on')).length;
 await a.click('button:has-text("Ask Claude for fresh ideas")');
 await a.waitForSelector('text=Claude is thinking');
-await new Promise(r => spawn(process.execPath, ['worker/run.mjs', 'check'], { env: { ...env, CLAUDE_FAKE: '1' }, stdio: 'inherit' }).on('exit', r));
+await new Promise(r => spawn(process.execPath, ['worker/run.mjs', 'check'], { env: { ...env, CLAUDE_FAKE: '1', FEEDS_FAKE: '1' }, stdio: 'inherit' }).on('exit', r));
 await a.waitForSelector('text=Pretend new dish', { timeout: 15000 });
+assert(await a.isVisible('text=New on The Guardian'), "one idea from the Guardian's recipes this week");
+assert(await a.isVisible('text=Pretend theguardian.com recipe'), 'the recipe site idea is shown');
 assert(await a.isVisible('text=New from Claude'), 'new dish from Claude added to the ideas');
 assert(await a.isVisible('text=Because you liked'), 'Claude reasons shown');
 assert((await a.$$('.meal.on')).length === picksBefore, 'picks kept when Claude refreshes ideas');
 await a.screenshot({ path: `${SHOTS}/05d-claude-ideas.png`, fullPage: true });
+
+// Settings › Recipe sites: the Guardian by default, with how the last read went; add another
+await a.goto(`${BASE}#/settings`);
+await a.waitForSelector('text=Recipe sites');
+assert(await a.isVisible('text=1 new in the last week'), 'the Guardian is a recipe site by default, and was read');
+await a.fill('input[name=url][aria-label="Recipe site address"]', 'bbcgoodfood.com');
+await a.fill('input[name=name][aria-label="Name"]', 'BBC Good Food');
+await a.click('form[data-form=addSource] button');
+await a.waitForSelector('text=BBC Good Food');
+await a.screenshot({ path: `${SHOTS}/05e-recipe-sites.png`, fullPage: true });
+await a.click('.btn[data-act=delSource][data-id="1"]');
+await a.waitForSelector('text=BBC Good Food', { state: 'detached' });
 
 // The shop
 await a.goto(`${BASE}#/shop`);

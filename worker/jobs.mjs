@@ -6,6 +6,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { fetchRecipe } from './recipe.mjs';
 import { claudeIdeas, claudeIngredients } from './ideas-claude.mjs';
+import { recentRecipes, recipeSources } from './feeds.mjs';
 import { pickIdeas, weekId, iso } from '../js/plan.js';
 
 export function makeJobs(db) {
@@ -39,19 +40,28 @@ async function makeIdeasInner(h, sunday, madeBy, keep) {
   if (!meals.length) return;
   const ref = h.ref.collection('weeks').doc(sunday);
   let offered = null, reasons = {}, by = 'rules';
+  // from: meal id -> recipe site, for the ideas that came from Settings › Recipe sites.
+  const from = {};
+  const featured = await siteRecipes(h, meals, keep);
   try {
     const weeks = (await h.ref.collection('weeks').orderBy('createdAt', 'desc').limit(8).get()).docs.map(d => ({ id: d.id, ...d.data() })).filter(w => w.id !== sunday);
     const skipped = (await h.ref.collection('staples').where('skips', '>', 0).get()).docs.map(d => d.data().name);
     const month = new Date().toLocaleDateString('en-GB', { month: 'long', timeZone: 'Europe/London' });
-    const ideas = await claudeIdeas({ meals, weeks, skippedStaples: skipped, notes: h.data().notes || '', season: `${month}, UK` });
+    const ideas = await claudeIdeas({ meals, weeks, skippedStaples: skipped, notes: h.data().notes || '', season: `${month}, UK`, featured });
     if (ideas?.length >= 6) {
       offered = [...keep];
       const b = db.batch();
       for (const i of ideas) {
         let id = i.id;
-        if (i.meal) { const doc = h.ref.collection('meals').doc(); id = doc.id; b.set(doc, { ...i.meal, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: { name: 'Claude' } }); }
+        if (i.meal) {
+          // A recipe from a site: use the page's own ingredient list when it has one.
+          if (i.meal.source) Object.assign(i.meal, await fromPage(i.meal.source));
+          const doc = h.ref.collection('meals').doc(); id = doc.id;
+          b.set(doc, { ...i.meal, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: { name: 'Claude' } });
+        }
         if (!offered.includes(id)) offered.push(id);
         if (i.reason) reasons[id] = i.reason;
+        if (i.from) from[id] = i.from;
       }
       await b.commit();
       // Any the variety check dropped are topped up from the usual picks.
@@ -63,12 +73,64 @@ async function makeIdeasInner(h, sunday, madeBy, keep) {
     console.log(`Claude ideas failed, using the rules instead: ${e.message}`);
   }
   if (!offered) offered = [...keep, ...pickIdeas(meals.filter(m => !keep.includes(m.id)), { count: 10 - keep.length, today: iso(new Date()) })];
+  await addSiteRecipes(h, featured, offered, keep, reasons, from);
   // A requested refresh keeps the week's picks (the kept meals stay in the list).
-  await ref.set({ offered, reasons, ...(madeBy === 'request' ? {} : { picks: {}, createdAt: FieldValue.serverTimestamp() }), madeBy, ideasBy: by, ideasRequested: FieldValue.delete() }, { merge: true });
+  await ref.set({ offered, reasons, from, ...(madeBy === 'request' ? {} : { picks: {}, createdAt: FieldValue.serverTimestamp() }), madeBy, ideasBy: by, ideasRequested: FieldValue.delete() }, { merge: true });
   const b = db.batch();
   for (const id of offered) b.set(h.ref.collection('meals').doc(id), { lastOffered: sunday }, { merge: true });
   await b.commit();
   console.log(`Made ${offered.length} ideas for week ${sunday} (${by})`);
+}
+
+// This week's recipes from the household's recipe sites, leaving out ones
+// already in the meal library (offered in an earlier week) unless picked.
+// Each site's result is saved on the household for Settings to show.
+async function siteRecipes(h, meals, keep) {
+  const sources = recipeSources(h.data());
+  if (!sources.length) return [];
+  try {
+    const { recipes, status } = await recentRecipes(sources);
+    const at = new Date().toISOString();
+    await h.ref.set({ recipeSourceStatus: status.map(s => ({ ...s, at })) }, { merge: true });
+    const seen = new Set(meals.filter(m => m.source && !keep.includes(m.id)).map(m => m.source));
+    return recipes.filter(r => !seen.has(r.url));
+  } catch (e) {
+    console.log(`Recipe sites failed: ${e.message}`);
+    return [];
+  }
+}
+
+const readRecipe = url => process.env.RECIPE_FAKE ? fakeRecipe(url) : fetchRecipe(url);
+async function fromPage(url) {
+  try {
+    const r = await readRecipe(url);
+    return { ingredients: r.ingredients, ...(r.image ? { image: r.image } : {}), ...(r.servings ? { servings: r.servings } : {}) };
+  } catch (e) {
+    console.log(`Couldn't read a site recipe, keeping Claude's ingredients: ${e.message}`);
+    return {};
+  }
+}
+
+// Makes sure each site with new recipes has one in the ideas (Claude may have
+// left it out, or the rules made the ideas). Takes the newest page that has
+// a recipe on it, and puts it in place of the last idea that isn't a pick.
+async function addSiteRecipes(h, featured, offered, keep, reasons, from) {
+  const done = new Set(Object.values(from));
+  for (const site of new Set(featured.map(f => f.source))) {
+    if (done.has(site)) continue;
+    for (const f of featured.filter(x => x.source === site).slice(0, 3)) {
+      let r;
+      try { r = await readRecipe(f.url); } catch (e) { console.log(`Site recipe skipped: ${e.message}`); continue; }
+      const doc = h.ref.collection('meals').doc();
+      await doc.set({ name: r.name || f.title, ingredients: r.ingredients, source: f.url, image: r.image || null, servings: r.servings || null, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: { name: site } });
+      let at = -1;
+      for (let k = offered.length - 1; k >= keep.length; k--) if (!from[offered[k]] && !keep.includes(offered[k])) { at = k; break; }
+      if (offered.length >= 10 + keep.length && at >= 0) offered[at] = doc.id; else offered.push(doc.id);
+      from[doc.id] = site;
+      reasons[doc.id] = `New on ${site} this week.`;
+      break;
+    }
+  }
 }
 
 // Reads the recipe at the link and saves it as a meal. If asked, also adds it
