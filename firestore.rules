@@ -1,7 +1,7 @@
 rules_version = '2';
 
-// Rules for the weekly shop's own Firebase project. Paste all of this into
-// Firebase console › Firestore Database › Rules › Publish.
+// Rules for the weekly shop's own Firebase project. The Deploy database rules
+// workflow publishes this file whenever it changes on main.
 //
 // Everything for a household lives under households/{hid}. Only members can
 // read or write it. Someone joins by opening an invite link, which writes

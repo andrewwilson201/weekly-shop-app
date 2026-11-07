@@ -79,7 +79,8 @@ await a.screenshot({ path: `${SHOTS}/04-list.png` });
 
 // Staples import
 await a.goto(`${BASE}#/settings`);
-const seed = process.env.SEED;
+// SEED=path uses another seed file, e.g. one made from real orders by tools/make-seed.py.
+const seed = process.env.SEED || 'test/fixtures/staples.json';
 if (seed) {
   await a.setInputFiles('input[type=file]', seed);
   await a.waitForSelector('text=Imported');
@@ -190,6 +191,18 @@ await a.goto(`${BASE}#/shop`);
 await a.waitForSelector('text=For the meals');
 assert(await a.isVisible('text=Black beans'), 'imported recipe ingredients are in the shop');
 await a.screenshot({ path: `${SHOTS}/06-shop.png`, fullPage: true });
+// Quantities change with − / + on each line, and things can be added from the Shop screen.
+{
+  const row = a.locator('li:has-text("Black beans")').first();
+  const before = Number(await row.locator('.stepper b').innerText());
+  await row.locator('button[aria-label^="One more"]').click();
+  await a.waitForFunction(n => [...document.querySelectorAll('li')].some(li => li.textContent.includes('Black beans') && li.querySelector('.stepper b')?.textContent === String(n)), before + 1);
+  assert(true, 'quantity raised with + on the Shop screen');
+  await a.fill('form[data-form=addItem] input[name=text]', 'Oat milk x2');
+  await a.press('form[data-form=addItem] input[name=text]', 'Enter');
+  await a.waitForSelector('li:has-text("Oat milk") .stepper b:has-text("2")');
+  assert(true, 'item added from the Shop screen, with its quantity');
+}
 // Skip all staples, then put them back, then untick one (which the order records as a skip)
 await a.click('button:has-text("Skip all staples")');
 await a.waitForSelector('button:has-text("Put back")');
@@ -218,11 +231,14 @@ await a.click('.slots button >> nth=0');
 await a.waitForSelector('button:has-text("Approve £")', { timeout: 30000 });
 await a.screenshot({ path: `${SHOTS}/09-review.png`, fullPage: true });
 assert(await a.isVisible('text=not added'), 'unfound item reported');
+assert(!(await a.isVisible('text=organic chicken breast')), 'the full basket starts folded away');
+await a.click('summary:has-text("Everything in the basket")');
 assert(await a.isVisible('text=organic chicken breast'), 'meal ingredient uses the usual product (organic chicken)');
+assert(await a.isVisible('li:has-text("black beans") .qty:has-text("×2")') || await a.isVisible('li:has-text("Black beans") .qty:has-text("×2")'), 'the quantity changed on the Shop screen was ordered');
 assert(await a.isVisible('text=Swapped for offers'), 'cheaper swaps listed for review');
 assert(await a.locator('text=/cheaper .*black beans/i').last().isVisible(), 'a cheaper equivalent was bought');
-assert(await a.isVisible("text=Swapped in because it's on offer"), 'swap says it came from an offer');
-assert(await a.isVisible("text=You'd have got:"), 'swap shows what it replaced');
+assert(await a.isVisible('text=On offer: Half Price with Nectar'), 'swap says it came from an offer');
+assert(await a.isVisible('text=Instead of'), 'swap shows what it replaced');
 await a.click('button:has-text("Switch back")');
 await a.waitForSelector('text=Switched back from', { timeout: 30000 });
 assert(!(await a.locator('text=/cheaper .*black beans/i').count()) || !(await a.locator('text=/cheaper .*black beans/i').last().isVisible()) || await a.isVisible('text=Switched back from Cheaper'), 'switch back replaced the offer product');
@@ -253,14 +269,27 @@ await a.screenshot({ path: `${SHOTS}/13-recipes.png`, fullPage: true });
 await a.click('.list a:has-text("Easy chicken fajitas")');
 await a.waitForSelector('text=Toss the chicken with the paprika and oil.');
 assert(await a.isVisible('text=2 chicken breasts, sliced into strips'), 'recipe shows the page\'s ingredients with amounts');
+// Scaled to how many you cook for: the page's recipe serves 4.
+await a.click('.serves button[aria-label="Cook for more"]');
+await a.waitForSelector('text=3 chicken breasts, sliced into strips');
+assert(await a.isVisible('text=Scaled from serves 4'), 'recipe amounts scale when cooking for 5');
+await a.click('.serves button[aria-label="Cook for fewer"]');
+await a.waitForSelector('text=2 chicken breasts, sliced into strips');
 await a.click('.method button >> nth=0');
 assert(await a.locator('.method button.done').count() === 1, 'a step can be ticked off');
 await a.screenshot({ path: `${SHOTS}/14-recipe.png`, fullPage: true });
 await a.click('button:has-text("Cooked it")');
+// Would you make it again? (the note prompt is accepted empty)
+await a.waitForSelector('.actionbar button[data-act=verdict][data-v=yes]');
+await a.screenshot({ path: `${SHOTS}/14b-make-again.png` });
+await a.click('.actionbar button[data-act=verdict][data-v=yes]');
 await a.waitForSelector('.actionbar button:has-text("Undo")');
+assert(true, 'asked whether we\'d make it again after cooking');
 await a.goto(`${BASE}#/cook`);
 await a.waitForSelector('summary:has-text("Done lately")');
 assert(await a.locator('.list li:has(button[data-act=cooked])').count() === toCookCount - 1, 'a cooked dinner leaves the list');
+await a.click('summary:has-text("Done lately")');
+assert(await a.isVisible('text=Would make again'), 'the answer shows under Done lately');
 {
   const other = (await a.locator('.list li:has(button[data-act=cooked]) .name').first().innerText());
   await a.click('.list a:has-text("' + other.replace(/"/g, '') + '")');
@@ -288,6 +317,36 @@ assert(await a.locator('.list li:has(button[data-act=cooked])').count() === toCo
 await a.goto(`${BASE}#/staples`); await sleep(800);
 assert(await a.isVisible(`li:has-text("${firstStaple.replace(/"/g, '')}") >> text=left out 1× running`), 'unticked staple counted as a skip');
 assert(await a.isVisible('summary:has-text("see when")'), 'bought staples log the purchase date');
+
+// Ideas nobody picked stay out of the meal library, in their own folded list.
+await a.goto(`${BASE}#/meals`);
+await a.waitForSelector('#mealList');
+assert(!(await a.locator('#mealList li:has-text("Pretend theguardian.com recipe")').count()), 'unpicked recipe-site idea is not in the meal library');
+assert(await a.locator('#mealList li:has-text("Pretend new dish")').count() === 0 || await a.locator('.meal.on:has-text("Pretend new dish")').count() > 0, 'unpicked Claude ideas are not in the meal library');
+if (await a.locator('summary:has-text("Ideas you didn\'t pick")').count()) await a.click('summary:has-text("Ideas you didn\'t pick")');
+await a.screenshot({ path: `${SHOTS}/05f-past-ideas.png`, fullPage: true });
+
+// Trial run from Settings: everything up to Place order, then nothing bought.
+await a.goto(`${BASE}#/settings`);
+await a.click('button:has-text("Start a trial run")');
+await a.waitForSelector('text=Trial run · nothing is paid');
+{
+  const w2 = spawn(process.execPath, ['worker/run.mjs'], { env: { ...process.env, SAINSBURYS_FAKE: '1', CLAUDE_FAKE: '1', SAINSBURYS_EMAIL: 'x', SAINSBURYS_PASSWORD: 'y', FIRESTORE_EMULATOR_HOST: 'localhost:8081', WORKER_MINUTES: '5' }, stdio: 'inherit' });
+  const w2Done = new Promise(r => w2.on('exit', r));
+  await a.waitForSelector('input.code', { timeout: 30000 });
+  await a.fill('input.code', '123456'); await a.click('text=Send code');
+  await a.waitForSelector('.slots button', { timeout: 30000 });
+  await a.click('.slots button >> nth=0');
+  await a.waitForSelector('button:has-text("Check out (trial")', { timeout: 30000 });
+  await a.screenshot({ path: `${SHOTS}/17-trial-review.png`, fullPage: true });
+  await a.click('button:has-text("Check out (trial")');
+  await a.waitForSelector('h3:has-text("Trial finished")', { timeout: 30000 });
+  assert(await a.isVisible('text=Nothing was paid'), 'trial run stops before Place order');
+  await a.screenshot({ path: `${SHOTS}/18-trial-done.png`, fullPage: true });
+  await w2Done;
+  await a.goto(`${BASE}#/week`); await sleep(600);
+  assert(await a.isVisible('.actionbar >> text=Ordered'), 'a trial run doesn\'t replace the real order on This week');
+}
 
 // Holiday mode
 await a.goto(`${BASE}#/settings`);

@@ -1,10 +1,12 @@
 name: Order worker
 
-# Every 5 minutes, look for an order someone started in the app and drive it
-# through Sainsbury's. GitHub can run scheduled jobs a few minutes late.
+# Drives an order someone started in the app through Sainsbury's. The
+# startOrder Firebase function starts it the moment an order is sent; this
+# hourly timer is only a backup (GitHub runs timers late, often by hours).
+# The keepWorkerOn function stops GitHub switching it off after 60 quiet days.
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '23 * * * *'
   workflow_dispatch:
 
 concurrency:

@@ -183,3 +183,60 @@ test('toCook keeps last week\'s dinners until they are cooked', () => {
   const failed = toCook({ weeks: { w: { id: '2026-11-01', picks: { q: {} } } }, orders: [{ week: '2026-11-01', state: 'failed' }], current: '2026-11-08' });
   assert.deepEqual(failed.map(x => x.mealId), ['q']);
 });
+
+// ---------- added with the review fixes ----------
+import { scaleLine, scaleQty, scaleFor, servesNumber, isIdea, wouldNot, iso, pickIdeas } from '../js/plan.js';
+
+test('dates are UK dates: just after midnight in summer it is already the next day', () => {
+  assert.equal(iso(new Date('2026-07-01T23:30:00Z')), '2026-07-02');
+  assert.equal(iso(new Date('2026-12-01T23:30:00Z')), '2026-12-01');
+  // Sunday 00:30 in summer is a new week in the UK while it's still Saturday in UTC.
+  assert.equal(weekId(new Date('2026-07-04T23:30:00Z')), '2026-07-05');
+});
+
+test('recipe lines scale their leading amount only', () => {
+  assert.equal(scaleLine('2 x 400g tins chopped tomatoes', 2), '4 x 400g tins chopped tomatoes');
+  assert.equal(scaleLine('200g flour', 4 / 6), '135g flour');
+  assert.equal(scaleLine('1½ tbsp olive oil', 2), '3 tbsp olive oil');
+  assert.equal(scaleLine('2-3 garlic cloves', 2), '4–6 garlic cloves');
+  assert.equal(scaleLine('Salt and pepper', 2), 'Salt and pepper');
+  assert.equal(scaleLine('3 eggs', 1), '3 eggs');
+});
+
+test('meals scale from what the recipe serves to what the household cooks for', () => {
+  assert.equal(servesNumber('Serves 4-6'), 4);
+  assert.equal(scaleFor({ servings: '6' }, 4), 4 / 6);
+  assert.equal(scaleFor({ servings: '4', cookFor: 2 }, 4), 0.5);
+  assert.equal(scaleFor({}, 4), 1);
+  assert.equal(scaleQty(2, 4 / 6), 1);
+  assert.equal(scaleQty(1, 4 / 6), 1);
+  assert.equal(scaleQty(1, 2), 2);
+  assert.equal(scaleQty(3, 1.1), 3); // small changes ignored
+});
+
+test('Shop screen quantities override the line quantity', () => {
+  const lines = buildShop({ list: [{ id: 'a', text: 'Milk', qty: 1 }], qtys: { 'list:a': 3 } });
+  assert.equal(lines[0].qty, 3);
+});
+
+test('unpicked ideas from Claude or a recipe site are not library meals', () => {
+  assert.equal(isIdea({ idea: true }), true);
+  assert.equal(isIdea({ idea: true, timesChosen: 1 }), false);
+  assert.equal(isIdea({ idea: false }), false);
+  assert.equal(isIdea({ addedBy: { name: 'Claude' } }), true); // older meals without the flag
+  assert.equal(isIdea({ addedBy: { name: 'Andrew', uid: 'u1' } }), false);
+  assert.equal(isIdea({ name: 'Starter meal' }), false);
+});
+
+test('a dinner they would not make again is not suggested', () => {
+  const meals = [{ id: 'a', name: 'A', verdicts: [{ again: false }] }, { id: 'b', name: 'B', verdicts: [{ again: false }, { again: true }] }, { id: 'c', name: 'C' }];
+  assert.equal(wouldNot(meals[0]), true);
+  assert.equal(wouldNot(meals[1]), false);
+  assert.deepEqual(pickIdeas(meals, { count: 10 }).sort(), ['b', 'c']);
+});
+
+test('a trial order does not count as the week being ordered', () => {
+  const weeks = { '2026-11-01': { id: '2026-11-01', picks: { m1: {} } } };
+  assert.equal(toCook({ weeks, orders: [{ week: '2026-11-01', state: 'trial_done', trial: true }], current: '2026-11-08' }).length, 0);
+  assert.equal(toCook({ weeks, orders: [{ week: '2026-11-01', state: 'placed', meals: ['m1'] }], current: '2026-11-08' }).length, 1);
+});

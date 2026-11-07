@@ -455,3 +455,18 @@ a.chip:hover { text-decoration: none; }
 .cat-list details.cat > summary .grow { flex: 1; }
 .cat-list details.cat > summary .count { margin-left: auto; }
 .cat-list details.cat > summary::after { margin-left: 4px; }
+
+/* − 2 + steppers: quantities on the Shop screen, servings on a recipe */
+.stepper { display: inline-flex; align-items: center; gap: 2px; flex: none; background: var(--surface-2); border-radius: 99px; padding: 2px; }
+.stepper b { min-width: 22px; text-align: center; font-variant-numeric: tabular-nums; font-size: 15px; }
+.step { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 99px; border: 0; background: none; color: var(--text); padding: 0; cursor: pointer; }
+.step:hover { background: var(--surface-3); }
+.step svg { width: 16px; height: 16px; }
+.chip.serves { gap: 4px; padding: 2px 4px 2px 9px; }
+.chip.serves .step { width: 24px; height: 24px; }
+.chip.serves .step svg { width: 13px; height: 13px; }
+.chip.serves b { min-width: 14px; text-align: center; color: var(--text); }
+/* "Would you make it again?" */
+.verdict { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.verdict .btn svg { width: 16px; height: 16px; }
+.verdict.sm .btn { padding: 6px 9px; }

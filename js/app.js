@@ -1,6 +1,6 @@
 import * as S from './store.js';
-import { weekId, iso, addDays, buildShop, stapleStatus, pickIdeas, awayOn, awayWeek, skipRule, matchUsual, toCook } from './plan.js';
-import { icon, tile, avatar, MEAL_CATEGORIES, mealCategory, autoCategory, categoryTile } from './ui.js';
+import { weekId, iso, addDays, buildShop, stapleStatus, pickIdeas, awayOn, awayWeek, skipRule, matchUsual, toCook, isIdea, lastVerdict, servesNumber, scaleFor, scaleLine } from './plan.js?v=7';
+import { icon, tile, avatar, MEAL_CATEGORIES, mealCategory, autoCategory, categoryTile } from './ui.js?v=7';
 
 const $main = document.getElementById('main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -164,12 +164,15 @@ actions.signOut = () => run(S.signOut);
 const mealById = id => st.meals.find(m => m.id === id);
 const thisWeekId = () => weekId(new Date());
 const week = () => st.weeks[thisWeekId()];
-const activeOrder = () => st.orders.find(o => !['placed', 'failed', 'cancelled'].includes(o.state));
+const DONE_STATES = ['placed', 'failed', 'cancelled', 'trial_done'];
+const activeOrder = () => st.orders.find(o => !DONE_STATES.includes(o.state));
+// How many the household cooks for (Settings › Household), for scaling recipes.
+const householdServes = () => Number(st.household?.serves) || 4;
 const deliveryDate = () => week()?.deliveryDate || null;
 const pickedMeals = () => Object.keys(week()?.picks || {}).map(mealById).filter(Boolean);
 const TARGET = 5;
 // This week's order, running or placed.
-const weekOrder = () => activeOrder() || st.orders.find(o => o.state === 'placed' && o.week === thisWeekId());
+const weekOrder = () => { const a = activeOrder(); return a && !a.trial ? a : st.orders.find(o => o.state === 'placed' && o.week === thisWeekId() && !o.trial); };
 const orderLine = o => o.state === 'placed'
   ? `${fmtDay(o.deliveryDate)}${o.slot ? `, ${fmtTime(o.slot.start_time)}–${fmtTime(o.slot.end_time)}` : ''}${o.total ? ` · ${money(o.total)}` : ''}`
   : stateLabel(o.state);
@@ -258,6 +261,8 @@ actions.pick = el => run(() => {
   const id = el.dataset.id; const picks = week().picks || {};
   // Picked dinners get their method fetched (or written) now, so it's ready to cook from.
   if (!picks[id]) askRecipe(mealById(id));
+  // A picked idea joins the meal library.
+  if (!picks[id] && isIdea(mealById(id) || {})) S.updateH(['meals', id], { idea: false }).catch(e => console.error(e));
   return S.updateH(['weeks', thisWeekId()], { [`picks.${id}`]: picks[id] ? S.deleteField() : S.me() });
 });
 actions.day = el => run(() => S.setH(['weeks', thisWeekId()], { deliveryDate: el.dataset.id }));
@@ -311,8 +316,9 @@ function viewCook() {
   if (done.length) {
     html += `<details class="card flush disclosure" style="margin-top:16px" ${keep.cookedOpen ? 'open' : ''} data-toggle="cookedOpen"><summary>${icon('check')} Done lately <span class="count">${done.length}</span></summary><ul class="list">` + done.map(x => {
       const m = mealById(x.mealId);
-      return `<li>${tile(m, 'sm')}<a href="#/recipe/${esc(m.id)}" class="grow"><span class="name">${esc(m.name)}</span><span class="meta">${x.done.skipped ? 'Not making it' : `Cooked ${fmtDay(x.done.on)}`}${x.done.by?.name ? ` · ${esc(x.done.by.name.split(' ')[0])}` : ''}</span></a>
-        <button class="btn small ghost" data-act="uncook" data-id="${esc(x.week)}|${esc(m.id)}">Undo</button></li>`;
+      const v = x.done.verdict;
+      return `<li>${tile(m, 'sm')}<a href="#/recipe/${esc(m.id)}" class="grow"><span class="name">${esc(m.name)}</span><span class="meta">${x.done.skipped ? 'Not making it' : `Cooked ${fmtDay(x.done.on)}`}${x.done.by?.name ? ` · ${esc(x.done.by.name.split(' ')[0])}` : ''}${v ? ` · ${v.again ? 'Would make again' : 'Wouldn\'t make again'}` : ''}</span></a>
+        ${!x.done.skipped && !v ? verdictButtons(x.week, m.id, true) : `<button class="btn small ghost" data-act="uncook" data-id="${esc(x.week)}|${esc(m.id)}">Undo</button>`}</li>`;
     }).join('') + `</ul></details>`;
   }
   // Methods for anything on the list that hasn't got one yet.
@@ -320,7 +326,24 @@ function viewCook() {
   return html;
 }
 const markCooked = (wid, id, extra = {}) => S.updateH(['weeks', wid], { [`cooked.${id}`]: { by: S.me(), on: today(), ...extra } });
-actions.cooked = el => { const [wid, id] = el.dataset.id.split('|'); run(() => markCooked(wid, id), `${mealById(id)?.name || 'Dinner'} marked cooked`); };
+actions.cooked = el => { const [wid, id] = el.dataset.id.split('|'); run(() => markCooked(wid, id), `${mealById(id)?.name || 'Dinner'} marked cooked. Would you make it again?`); };
+// "Would you make it again?" after cooking: saved on the week's cooked entry and
+// on the meal (verdicts), which Claude reads when it picks ideas. A "no" stops
+// the dinner being suggested again; a note ("too spicy for the kids") guides Claude.
+function verdictButtons(wid, id, small = false, label = !small) {
+  const d = `${esc(wid)}|${esc(id)}`;
+  return `<span class="verdict${small ? ' sm' : ''}">${label ? '<span class="small muted">Would you make it again?</span>' : ''}<button class="btn small outline" data-act="verdict" data-id="${d}" data-v="yes" aria-label="Would make it again">${icon('thumbUp')}${small ? '' : ' Yes'}</button><button class="btn small outline" data-act="verdict" data-id="${d}" data-v="no" aria-label="Wouldn't make it again">${icon('thumbDown')}${small ? '' : ' No'}</button></span>`;
+}
+actions.verdict = el => {
+  const [wid, id] = el.dataset.id.split('|');
+  const again = el.dataset.v === 'yes';
+  const note = (prompt(again ? 'Any note for next time? (optional)' : 'What wasn\'t right? (optional, e.g. too spicy for the kids)') || '').trim().slice(0, 200);
+  const v = { again, by: S.me(), on: today(), ...(note ? { note } : {}) };
+  run(async () => {
+    await S.updateH(['weeks', wid], { [`cooked.${id}.verdict`]: v });
+    await S.updateH(['meals', id], { verdicts: S.arrayUnion(v) });
+  }, again ? 'Noted: one to make again' : 'Noted: it won\'t be suggested again');
+};
 actions.notCooking = el => { const [wid, id] = el.dataset.id.split('|'); run(async () => { await markCooked(wid, id, { skipped: true }); if (route === 'recipe') location.hash = '#/cook'; }, 'Taken off the list'); };
 actions.notCookingWeek = el => run(() => S.updateH(['weeks', el.dataset.id], Object.fromEntries(cookList().filter(x => x.week === el.dataset.id && !x.done).map(x => [`cooked.${x.mealId}`, { by: S.me(), on: today(), skipped: true }]))), 'Taken off the list');
 actions.uncook = el => { const [wid, id] = el.dataset.id.split('|'); run(() => S.updateH(['weeks', wid], { [`cooked.${id}`]: S.deleteField() })); };
@@ -336,13 +359,18 @@ function viewRecipe() {
   let html = `<a class="btn small ghost" href="${entry ? '#/cook' : '#/week'}" style="margin:8px 0 0 -6px">${icon('back')} ${entry ? 'Recipes' : 'This week'}</a>`;
   html += head(esc(m.name), { eyebrow: entry ? `${weekName(entry.week)} · ${esc(deliveryNote(entry))}` : 'Recipe' });
   if (m.image && /^https:\/\//.test(m.image)) html += `<img class="recipe-img" src="${esc(m.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`;
-  const facts = [r.time && `${icon('clock')} ${esc(r.time)}`, (r.servings || m.servings) && `${icon('users')} ${esc(/^\d+$/.test(r.servings || m.servings) ? `Serves ${r.servings || m.servings}` : r.servings || m.servings)}`].filter(Boolean);
+  // Scaled to how many you cook for (Settings › Household, or changed here for this meal).
+  const recipeServes = servesNumber(r.servings || m.servings);
+  const cookFor = Number(m.cookFor) || householdServes();
+  const f = scaleFor(m, householdServes());
+  const facts = [r.time && `${icon('clock')} ${esc(r.time)}`].filter(Boolean);
   html += `<div class="row recipe-facts">${facts.map(f => `<span class="chip outline">${f}</span>`).join('')}
     ${from ? `<a class="chip link" href="${esc(from)}" target="_blank" rel="noopener">${icon('link')} ${esc(hostOf(from))}</a>` : ''}
+    ${recipeServes ? `<span class="chip outline serves">${icon('users')} Serves <button class="step" data-act="cookFor" data-id="-1" aria-label="Cook for fewer">${icon('minus')}</button><b>${cookFor}</b><button class="step" data-act="cookFor" data-id="1" aria-label="Cook for more">${icon('plus')}</button></span>` : ''}
     ${'wakeLock' in navigator ? `<button class="chip ${wakeLock ? 'ok' : 'outline'}" data-act="screenOn" aria-pressed="${!!wakeLock}">${icon('sun')} ${wakeLock ? 'Screen stays on' : 'Keep screen on'}</button>` : ''}</div>`;
 
-  const lines = r.lines?.length ? r.lines : (m.ingredients || []).map(i => `${i.item}${i.qty > 1 ? ` ×${i.qty}` : ''}${i.pantry ? ' (cupboard)' : ''}`);
-  html += section('Ingredients', { count: lines.length || null });
+  const lines = r.lines?.length ? r.lines.map(l => scaleLine(l, f)) : (m.ingredients || []).map(i => `${i.item}${i.qty > 1 ? ` ×${i.qty}` : ''}${i.pantry ? ' (cupboard)' : ''}`);
+  html += section('Ingredients', { count: lines.length || null, right: recipeServes && f !== 1 ? `<span class="small muted">Scaled from serves ${recipeServes}</span>` : '' });
   html += lines.length ? `<div class="card"><ul class="ingredients">${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>` : `<div class="card soft"><p class="small muted">No ingredients saved. <a href="#/meal/${esc(m.id)}">Add them</a>.</p></div>`;
 
   html += section('Method');
@@ -358,7 +386,9 @@ function viewRecipe() {
   }
   html += `<p class="small muted" style="margin:12px 4px 0"><a href="#/meal/${esc(m.id)}">Edit the shop ingredients</a></p>`;
 
-  if (entry && !entry.done) {
+  if (entry?.done && !entry.done.skipped && !entry.done.verdict) {
+    html += `<div class="actionbar"><div><span class="sum"><b>Make it again?</b><span>Cooked ${fmtDay(entry.done.on)}</span></span><span class="spacer"></span>${verdictButtons(entry.week, m.id, false, false)}</div></div>`;
+  } else if (entry && !entry.done) {
     html += `<div class="actionbar"><div><button class="btn outline" data-act="notCooking" data-id="${esc(entry.week)}|${esc(m.id)}">Not making it</button><span class="spacer"></span>
       <button class="btn primary" data-act="cooked" data-id="${esc(entry.week)}|${esc(m.id)}">${icon('check')} Cooked it</button></div></div>`;
   } else if (entry?.done) {
@@ -367,6 +397,11 @@ function viewRecipe() {
   }
   return html;
 }
+actions.cookFor = el => {
+  const m = mealById(arg); if (!m) return;
+  const n = Math.max(1, Math.min(20, (Number(m.cookFor) || householdServes()) + Number(el.dataset.id)));
+  run(() => S.updateH(['meals', m.id], { cookFor: n === householdServes() ? S.deleteField() : n }));
+};
 actions.getRecipe = () => { const m = mealById(arg); if (m) S.updateH(['meals', m.id], { recipeRequested: true, recipeMessage: S.deleteField() }).catch(e => toast(e.message)); };
 actions.step = el => {
   const k = `steps:${arg}`; const i = +el.dataset.id; const t = keep[k] || [];
@@ -445,10 +480,12 @@ actions.clearDone = () => run(() => S.batchH(st.list.filter(i => i.done).map(i =
 function shopLines() {
   const w = week() || {};
   const list = st.list.map(it => { const u = usual(it); return u ? { ...it, uid: u.uid, product: u.name } : it; });
-  return buildShop({ staples: st.staples, meals: pickedMeals(), list, delivery: w.deliveryDate || addDays(today(), 2), extras: w.extras || {} });
+  return buildShop({ staples: st.staples, meals: pickedMeals(), list, delivery: w.deliveryDate || addDays(today(), 2), extras: w.extras || {}, qtys: w.qtys || {}, serves: householdServes() });
 }
+// Each line has − / + for how many; − at 1 leaves it out (like unticking).
 const lineRow = l => `<li><input type="checkbox" class="check" checked data-change="lineOff" data-id="${esc(l.key)}" aria-label="Include">
-  <span class="grow"><span class="name">${esc(l.name)}${l.qty > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span>${l.product ? `<span class="meta">${esc(l.product)}</span>` : ''}${l.for ? `<span class="meta">${esc(l.for.join(' · '))}</span>` : ''}</span></li>`;
+  <span class="grow"><span class="name">${esc(l.name)}</span>${l.product ? `<span class="meta">${esc(l.product)}</span>` : ''}${l.for ? `<span class="meta">${esc(l.for.join(' · '))}</span>` : ''}</span>
+  <span class="stepper"><button class="step" data-act="qty" data-id="${esc(l.key)}" data-q="${l.qty - 1}" aria-label="${l.qty > 1 ? 'One fewer' : 'Leave out'} ${esc(l.name)}">${icon(l.qty > 1 ? 'minus' : 'x')}</button><b aria-label="Quantity">${l.qty}</b><button class="step" data-act="qty" data-id="${esc(l.key)}" data-q="${l.qty + 1}" aria-label="One more ${esc(l.name)}">${icon('plus')}</button></span></li>`;
 function viewShop() {
   const w = week();
   const order = activeOrder();
@@ -470,7 +507,9 @@ function viewShop() {
   html += meals.length ? `<div class="card flush"><ul class="list inset-check">${meals.map(lineRow).join('')}</ul></div>` : `<div class="card soft"><p class="small muted">No meals picked yet. <a href="#/week">Pick dinners</a>.</p></div>`;
   const list = by('list');
   html += section('From the list', { count: list.length });
-  html += list.length ? `<div class="card flush"><ul class="list inset-check">${list.map(lineRow).join('')}</ul></div>` : `<div class="card soft"><p class="small muted">Nothing on the list. <a href="#/list">Add something</a>.</p></div>`;
+  // Anything else goes on the shared list from here too.
+  html += `<form data-form="addItem" class="inputrow" style="margin-bottom:10px"><input type="text" name="text" data-keep="newItem" placeholder="Add something else, e.g. milk x2" autocomplete="off" enterkeyhint="done" aria-label="Add an item"><button class="btn tonal" aria-label="Add">${icon('plus')} Add</button></form>`;
+  html += list.length ? `<div class="card flush"><ul class="list inset-check">${list.map(lineRow).join('')}</ul></div>` : '';
 
   // Staples not added: suggestions and ones switched off
   const off = st.staples.filter(s => !lines.some(l => l.key === `staple:${s.id}`)).map(s => ({ s, status: stapleStatus(s, w?.deliveryDate || addDays(today(), 2)) }))
@@ -490,16 +529,24 @@ const setExtra = (key, val) => S.setH(['weeks', thisWeekId()], { extras: { [key]
 actions.skipStaples = () => run(() => S.setH(['weeks', thisWeekId()], { extras: Object.fromEntries(shopLines().filter(l => l.source === 'staple').map(l => [l.key, false])) }), 'Staples skipped this week');
 actions.unskipStaples = () => run(() => S.setH(['weeks', thisWeekId()], { extras: Object.fromEntries(Object.entries(week()?.extras || {}).filter(([k, v]) => k.startsWith('staple:') && v === false).map(([k]) => [k, S.deleteField()])) }));
 actions.lineOff = el => run(() => setExtra(el.dataset.id, false));
+actions.qty = el => {
+  const key = el.dataset.id, q = Number(el.dataset.q);
+  if (q < 1) { run(() => setExtra(key, false)); return; }
+  run(() => S.setH(['weeks', thisWeekId()], { qtys: { [key]: q } }));
+};
 actions.lineOn = el => run(() => setExtra(el.dataset.id, true));
-actions.order = () => run(async () => {
+actions.order = () => startOrder(false);
+// trial: Settings › Order helper › Trial run. Same shop, but it stops before Place order.
+const startOrder = trial => run(async () => {
   if (activeOrder()) { location.hash = '#/order'; return; }
-  const w = week();
+  const w = trial ? { ...(week() || {}), deliveryDate: week()?.deliveryDate || addDays(today(), 2) } : week();
   const lines = shopLines().map(l => Object.fromEntries(Object.entries(l).filter(([, v]) => v !== undefined)));
   // Staples that would have been added but were unticked: the worker counts these as skips.
   const skippedStaples = st.staples.filter(s => (w.extras || {})[`staple:${s.id}`] === false && stapleStatus(s, w.deliveryDate) === 'add').map(s => s.id);
+  if (trial && !lines.length) throw new Error('The shop is empty. Pick some dinners or add to the list first, so there\'s something to put in the basket.');
   await S.addH(['orders'], {
-    week: thisWeekId(), deliveryDate: w.deliveryDate, state: 'requested', lines, skippedStaples, meals: Object.keys(w.picks || {}),
-    requestedBy: S.me(), createdAt: S.serverTimestamp(), log: [],
+    week: thisWeekId(), deliveryDate: w.deliveryDate, state: 'requested', lines, skippedStaples: trial ? [] : skippedStaples, meals: trial ? [] : Object.keys(w.picks || {}),
+    requestedBy: S.me(), createdAt: S.serverTimestamp(), log: [], ...(trial ? { trial: true } : {}),
   });
   location.hash = '#/order';
 });
@@ -515,7 +562,7 @@ const STEPS = [
   ['placing', 'Placing the order'],
   ['placed', 'Ordered'],
 ];
-const stateLabel = s => ({ failed: 'Stopped', cancelled: 'Cancelled', needs_you: 'Needs you' }[s] || (STEPS.find(x => x[0] === s) || [, s])[1]);
+const stateLabel = s => ({ failed: 'Stopped', cancelled: 'Cancelled', needs_you: 'Needs you', trial_done: 'Trial finished' }[s] || (STEPS.find(x => x[0] === s) || [, s])[1]);
 const HERO = {
   requested: ['clock', '', 'Starting the order helper', 'Usually within a few minutes. You can close the app; it carries on.'],
   logging_in: ['lock', '', 'Logging in to Sainsbury\'s', 'This takes about a minute.'],
@@ -528,13 +575,15 @@ const HERO = {
   failed: ['alert', 'danger', 'The order stopped', ''],
   needs_you: ['alert', 'danger', 'The order needs you', ''],
   cancelled: ['x', 'danger', 'Cancelled', ''],
+  trial_done: ['check', '', 'Trial finished', ''],
 };
 function viewOrder() {
   const o = arg ? st.orders.find(x => x.id === arg) : (activeOrder() || st.orders[0]);
   if (!o) return head('Order') + empty('cart', 'No orders yet', 'Build the shop and tap Order to start one.', '<a class="btn primary" href="#/shop">Go to the shop</a>');
   const idx = STEPS.findIndex(s => s[0] === o.state);
-  const [hic, htone, htitle, hsub] = HERO[o.state] || HERO.requested;
-  let html = head(`Order for ${fmtDay(o.deliveryDate, { weekday: 'long', day: 'numeric', month: 'short' })}`, { eyebrow: 'Sainsbury\'s order', sub: `Started by ${esc(o.requestedBy?.name)}${o.slot ? ` · delivery ${fmtTime(o.slot.start_time)}–${fmtTime(o.slot.end_time)}` : ''}` }) + (o.week === thisWeekId() ? flow('order') : '');
+  const [hic, htone, htitle, hsub] = o.trial && o.state === 'review' ? ['bag', 'warn', 'Check the basket', 'Then tap Check out to try Sainsbury\'s checkout. Nothing is paid.'] : HERO[o.state] || HERO.requested;
+  let html = head(`${o.trial ? 'Trial order' : 'Order'} for ${fmtDay(o.deliveryDate, { weekday: 'long', day: 'numeric', month: 'short' })}`, { eyebrow: o.trial ? 'Trial run · nothing is paid' : 'Sainsbury\'s order', sub: `Started by ${esc(o.requestedBy?.name)}${o.slot ? ` · delivery ${fmtTime(o.slot.start_time)}–${fmtTime(o.slot.end_time)}` : ''}` }) + (o.week === thisWeekId() && !o.trial ? flow('order') : '');
+  if (o.trial && !DONE_STATES.includes(o.state)) html += `<div class="notice info">${icon('info')}<span class="grow"><b>Trial run.</b> It does everything a real order does up to Sainsbury's Place order button, then stops. Afterwards it takes out what it added and releases the slot.</span></div>`;
   const placedSub = o.state === 'placed' ? `${o.orderNumber ? `Sainsbury's order ${esc(o.orderNumber)}. ` : ''}Staples, meals and the list have been updated.` : hsub;
   html += `<div class="hero"><div class="status"><span class="dot-lg ${htone}">${icon(hic)}</span><span class="grow"><h3>${htitle}</h3>${placedSub ? `<p class="sub">${placedSub}</p>` : ''}</span></div></div>`;
   if (o.message) html += `<div class="notice ${o.state === 'failed' || o.state === 'needs_you' ? 'danger' : ''}">${icon('info')}<span class="grow">${esc(o.message)}</span></div>`;
@@ -555,7 +604,9 @@ function viewOrder() {
     }
     html += `</div>`;
   }
-  if (['review', 'placing', 'placed'].includes(o.state) || (o.basket && o.state === 'failed')) {
+  if (['review', 'placing', 'placed', 'trial_done'].includes(o.state) || (o.basket && o.state === 'failed')) {
+    // What needs a decision comes first (not added, offer swaps, things in the
+    // basket that weren't in this shop), then the total; the full basket is folded away.
     const b = o.basket || {};
     const missing = (o.lines || []).filter(l => l.result && l.result !== 'added');
     if (missing.length) html += `<div class="notice warn">${icon('alert')}<span class="grow"><b>${missing.length} not added</b><ul class="list compact" style="margin:6px -16px -10px">${missing.map(l => `<li><span class="grow"><span class="name">${esc(l.name)}</span><span class="meta" style="color:inherit;opacity:.8">${esc(l.result === 'not_found' ? 'Not found' : l.result === 'unavailable' ? 'Unavailable' : l.result)}</span></span></li>`).join('')}</ul></span></div>`;
@@ -570,33 +621,40 @@ function viewOrder() {
       html += `<div class="card flush"><ul class="list">` + swaps.map(l => {
         const waiting = asked.has(l.key) && !l.swap.failed;
         return `<li><span class="grow"><span class="name">${esc(l.product)}${(l.qty || 1) > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span>
-          <span class="meta">Swapped in because it's on offer${l.swap.offer ? `: <b style="color:var(--warm)">${esc(l.swap.offer)}</b>` : ''}</span>
-          <span class="meta">You'd have got: ${esc(l.swap.from)}</span>
-          <span class="meta" style="color:var(--ok)">Saves about ${money(l.swap.saving)}</span>
+          <span class="meta">On offer${l.swap.offer ? `: <b style="color:var(--warm)">${esc(l.swap.offer)}</b>` : ''} · saves about ${money(l.swap.saving)}</span>
+          <span class="meta">Instead of ${esc(l.swap.from)}</span>
           ${l.swap.error ? `<span class="meta" style="color:var(--danger)">${esc(l.swap.error)}</span>` : ''}</span>
           ${canUndo && !l.swap.failed ? `<button class="btn small outline" data-act="undoSwap" data-id="${esc(l.key)}" ${waiting ? 'disabled' : ''}>${waiting ? 'Switching…' : 'Switch back'}</button>` : ''}</li>`;
-      }).join('') + undone.map(l => `<li><span class="grow"><span class="name">${esc(l.product)}${(l.qty || 1) > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span><span class="meta">Switched back from ${esc(l.undone.product)} (the offer would have saved ${money(l.undone.saving)})</span></span><span class="pill">Your usual</span></li>`).join('') +
-        `</ul><p class="tiny muted" style="margin:0;padding:0 16px 12px">Each one is the same kind of product as the one you'd have got, cheaper per kg, litre or item this week because of the offer. The saving is against what you'd have paid for the original.</p></div>`;
+      }).join('') + undone.map(l => `<li><span class="grow"><span class="name">${esc(l.product)}${(l.qty || 1) > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span><span class="meta">Switched back from ${esc(l.undone.product)} (the offer would have saved ${money(l.undone.saving)})</span></span><span class="pill">Your usual</span></li>`).join('') + `</ul></div>`;
     }
-    html += section('Basket', { count: (b.items || []).length });
-    html += `<div class="card flush"><ul class="list compact">` + (b.items || []).map(i => `<li><span class="grow"><span class="name">${esc(i.name)}${i.qty > 1 ? `<span class="qty">×${i.qty}</span>` : ''}</span>${i.offer ? `<span class="meta" style="color:var(--warm)">${esc(i.offer)}</span>` : ''}${swaps.some(l => String(l.uid) === String(i.uid)) ? `<span class="meta">Swapped in for an offer (see above)</span>` : ''}</span><span class="price">${money(i.total)}</span></li>`).join('') + `</ul>
-      <div class="totals"><div class="row"><span>Items</span><span class="spacer"></span><span class="price">${money(b.subtotal)}</span></div>
+    // In the basket but not from this shop: left there from before.
+    const ours = new Set((o.lines || []).filter(l => l.result === 'added').map(l => String(l.uid)));
+    const extra = (b.items || []).filter(i => i.uid != null && !ours.has(String(i.uid)));
+    if (extra.length) {
+      html += section('Already in the basket', { count: extra.length, right: `<span class="price">${money(extra.reduce((t, i) => t + (i.total || 0), 0))}</span>` });
+      html += `<div class="card flush"><p class="small muted" style="margin:0;padding:12px 16px 0">These were in your Sainsbury's basket before and will be ordered too. Take out any you don't want in the Sainsbury's app before approving.</p><ul class="list compact">${extra.map(i => `<li><span class="grow"><span class="name">${esc(i.name)}${i.qty > 1 ? `<span class="qty">×${i.qty}</span>` : ''}</span></span><span class="price">${money(i.total)}</span></li>`).join('')}</ul></div>`;
+    }
+    html += section('Total');
+    html += `<div class="card flush"><div class="totals" style="border-top:0"><div class="row"><span>${plural((b.items || []).length, 'item')}</span><span class="spacer"></span><span class="price">${money(b.subtotal)}</span></div>
       ${b.savings ? `<div class="row"><span>Savings</span><span class="spacer"></span><span class="price" style="color:var(--ok)">−${money(b.savings)}</span></div>` : ''}
       <div class="row"><span>Delivery</span><span class="spacer"></span><span class="price">${money(b.delivery)}</span></div>
       <div class="total"><span>Total</span><span class="price">${money(o.total)}</span></div>
-      ${o.card ? `<p class="small muted" style="margin:8px 0 0">Paid with ${esc(o.card)} on delivery day. Substitutions off.</p>` : ''}</div></div>`;
+      ${o.card ? `<p class="small muted" style="margin:8px 0 0">${o.trial ? `Sainsbury's checkout showed ${money(o.checkoutTotal)} with ${esc(o.card)}. Nothing was paid.` : `Paid with ${esc(o.card)} on delivery day. Substitutions off.`}</p>` : ''}</div>
+      <details class="disclosure" data-toggle="basketOpen" ${keep.basketOpen ? 'open' : ''} style="border-top:1px solid var(--line)"><summary>${icon('bag')} Everything in the basket <span class="count">${(b.items || []).length}</span></summary>
+      <ul class="list compact">` + (b.items || []).map(i => `<li><span class="grow"><span class="name">${esc(i.name)}${i.qty > 1 ? `<span class="qty">×${i.qty}</span>` : ''}</span>${i.offer ? `<span class="meta" style="color:var(--warm)">${esc(i.offer)}</span>` : ''}${swaps.some(l => String(l.uid) === String(i.uid)) ? `<span class="meta">Swapped in for an offer</span>` : ''}</span><span class="price">${money(i.total)}</span></li>`).join('') + `</ul></details></div>`;
     if (o.state === 'review') {
       const switching = swaps.some(l => asked.has(l.key) && !l.swap.failed);
-      html += `<div class="actionbar col"><div><p class="small muted" style="margin:0 0 10px">Approving places the order with Sainsbury's. You can still change it in the Sainsbury's app until the cut-off.</p>
+      const label = o.approvedBy ? (o.trial ? 'Checking out…' : 'Placing…') : switching ? 'Updating the total…' : o.trial ? `Check out (trial, ${money(o.total)})` : `Approve ${money(o.total)}`;
+      html += `<div class="actionbar col"><div><p class="small muted" style="margin:0 0 10px">${o.trial ? 'Goes to Sainsbury\'s checkout and reads the total, but doesn\'t press Place order. Nothing is paid.' : 'Approving places the order with Sainsbury\'s. You can still change it in the Sainsbury\'s app until the cut-off.'}</p>
         <div class="row nowrap"><button class="btn outline danger" data-act="cancelOrder">Cancel</button>
-        <button class="btn primary lg" style="flex:1" data-act="approve" ${o.approvedBy || switching ? 'disabled' : ''}>${o.approvedBy ? 'Placing…' : switching ? 'Updating the total…' : `Approve ${money(o.total)}`}</button></div></div></div>`;
+        <button class="btn primary lg" style="flex:1" data-act="approve" ${o.approvedBy || switching ? 'disabled' : ''}>${label}</button></div></div></div>`;
     }
   }
   // Once it's placed, the step-by-step progress is history: tuck it away.
   const stepsHtml = `<ul class="steps">` + STEPS.map(([k, label], i) => { const c = i < idx || o.state === 'placed' ? 'done' : i === idx ? 'now' : ''; return `<li class="${c}"><span class="dot">${c === 'done' ? icon('check') : ''}</span>${label}</li>`; }).join('') + `</ul>`;
-  if (o.state !== 'placed') html += section('Progress') + `<div class="card flush">${stepsHtml}</div>`;
-  if (!['placed', 'failed', 'cancelled', 'review'].includes(o.state)) html += `<div class="row end" style="margin-top:4px"><button class="btn small ghost danger" data-act="cancelOrder">Cancel order</button></div>`;
-  if (['failed', 'cancelled'].includes(o.state)) html += `<a class="btn primary block" href="#/shop">Back to the shop to try again</a>`;
+  if (!['placed', 'trial_done'].includes(o.state)) html += section('Progress') + `<div class="card flush">${stepsHtml}</div>`;
+  if (![...DONE_STATES, 'review'].includes(o.state)) html += `<div class="row end" style="margin-top:4px"><button class="btn small ghost danger" data-act="cancelOrder">Cancel order</button></div>`;
+  if (['failed', 'cancelled', 'trial_done'].includes(o.state)) html += o.trial ? `<a class="btn primary block" href="#/week">Back to this week</a>` : `<a class="btn primary block" href="#/shop">Back to the shop to try again</a>`;
   if (o.state === 'placed') html += `<a class="btn primary block" href="#/cook" style="margin-top:12px">${icon('book')} Recipes for these dinners</a><a class="btn outline block" href="#/week" style="margin-top:8px">Back to this week</a>`;
   if (o.log?.length) html += `<details class="card flush disclosure" style="margin-top:12px"><summary>${icon('list')} Details</summary><ul class="list compact small">${o.log.slice(-20).map(l => `<li class="muted">${esc(l)}</li>`).join('')}</ul></details>`;
   return html;
@@ -612,7 +670,7 @@ actions.slot = el => run(() => S.updateH(['orders', curOrder().id], { slotChoice
 actions.undoSwap = el => run(() => S.updateH(['orders', curOrder().id], { undoSwaps: S.arrayUnion(el.dataset.id) }));
 actions.approve = () => {
   const o = curOrder();
-  if (!confirm(`Place the order for ${money(o.total)}?`)) return;
+  if (!confirm(o.trial ? `Go to Sainsbury's checkout for ${money(o.total)}? This is a trial: it won't place the order.` : `Place the order for ${money(o.total)}?`)) return;
   run(() => S.updateH(['orders', o.id], { approvedBy: S.me(), approvedTotal: o.total }));
 };
 actions.cancelOrder = () => {
@@ -623,7 +681,10 @@ actions.cancelOrder = () => {
 // ---------- Meals and staples (the household's library) ----------
 const libTabs = now => `<div class="seg" role="tablist">${[['meals', 'Meals'], ['staples', 'Staples']].map(([r, l]) => `<a href="#/${r}" role="tab" class="${r === now ? 'on' : ''}" aria-selected="${r === now}">${l}</a>`).join('')}</div>`;
 function viewMeals() {
-  const meals = [...st.meals].filter(m => !m.archived).sort((a, b) => (b.timesChosen || 0) - (a.timesChosen || 0) || a.name.localeCompare(b.name));
+  // Ideas nobody has picked aren't part of the library (see isIdea); they're listed under "Ideas you didn't pick".
+  const pickedEver = new Set(Object.values(st.weeks).flatMap(w => Object.keys(w.picks || {})));
+  const ideaOnly = m => isIdea(m) && !pickedEver.has(m.id);
+  const meals = [...st.meals].filter(m => !m.archived && !ideaOnly(m)).sort((a, b) => (b.timesChosen || 0) - (a.timesChosen || 0) || a.name.localeCompare(b.name));
   let html = libTabs('meals') + head('Meals', { sub: 'Your dinners. Each Sunday, ideas for the week are picked from these and from Claude.', right: `<a class="btn small tonal" href="#/meal/new">${icon('plus')} New</a>` });
   html += `<form class="card" data-form="importLink"><h3 style="display:flex;gap:8px;align-items:center">${icon('link')} Add a recipe from a link</h3>
       <p class="small muted" style="margin:4px 0 12px">Paste a recipe page, or share it to Weekly Shop from your phone. The ingredients are added for you.</p>
@@ -647,6 +708,10 @@ function viewMeals() {
       <ul class="list">${g.map(row).join('')}</ul></details>`;
   }
   html += `</div>`;
+  const pastIdeas = st.meals.filter(m => !m.archived && ideaOnly(m) && !inWeek.has(m.id)).sort((a, b) => String(b.lastOffered || '').localeCompare(String(a.lastOffered || '')));
+  if (pastIdeas.length) html += `<details class="card flush disclosure" style="margin-top:12px" data-toggle="pastIdeas" ${keep.pastIdeas ? 'open' : ''}><summary>${icon('sparkle')} Ideas you didn't pick <span class="count">${pastIdeas.length}</span></summary>
+    <p class="small muted" style="margin:0;padding:0 16px 8px">Suggested by Claude or your recipe sites. They join your meals once picked, or add one now.</p><ul class="list">${pastIdeas.map(m => `<li>${tile(m, 'sm')}<a href="#/recipe/${esc(m.id)}" class="grow"><span class="name">${esc(m.name)}</span><span class="meta">${esc(m.addedBy?.name ? `From ${m.addedBy.name}` : 'Idea')}${m.lastOffered ? ` · offered week of ${fmtDay(m.lastOffered, { day: 'numeric', month: 'short' })}` : ''}</span></a>
+    <button class="btn small outline" data-act="keepIdea" data-id="${esc(m.id)}">Add to meals</button></li>`).join('')}</ul></details>`;
   const archived = st.meals.filter(m => m.archived);
   if (archived.length) html += `<details class="card flush disclosure" style="margin-top:12px"><summary>Removed meals <span class="count">${archived.length}</span></summary><ul class="list">${archived.map(m => `<li><span class="grow">${esc(m.name)}</span><button class="btn small outline" data-act="unarchive" data-id="${m.id}">Restore</button></li>`).join('')}</ul></details>`;
   return html;
@@ -682,6 +747,7 @@ function takeSharedLink() {
 }
 
 actions.offer = el => run(() => S.setH(['weeks', thisWeekId()], { offered: [...(week().offered || []), el.dataset.id] }), 'Added to this week');
+actions.keepIdea = el => run(() => S.updateH(['meals', el.dataset.id], { idea: false }), 'Added to your meals');
 actions.unarchive = el => run(() => S.updateH(['meals', el.dataset.id], { archived: false }));
 
 function viewMeal() {
@@ -763,13 +829,19 @@ function viewSettings() {
       <input type="text" readonly value="${esc(link)}" onclick="this.select()"></label>
       <div class="row"><button class="btn primary" data-act="share" data-id="${esc(link)}">${icon('users')} Share invite link</button>
       <button class="btn ghost" data-act="newInvite">Make a new link</button></div>
-      <p class="tiny muted" style="margin-top:10px">A new link stops the old one working. People already in stay in.</p></div>
+      <p class="tiny muted" style="margin-top:10px">A new link stops the old one working. People already in stay in.</p>
+      <div class="row nowrap" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)"><span class="grow"><b>Cooking for</b><br><span class="small muted">Recipes and their shop amounts are scaled to this. Change it on a recipe for one meal.</span></span>
+        <span class="stepper"><button class="step" data-act="serves" data-id="-1" aria-label="Fewer people">${icon('minus')}</button><b>${householdServes()}</b><button class="step" data-act="serves" data-id="1" aria-label="More people">${icon('plus')}</button></span></div></div>
 
     ${section('Notifications')}
     <div class="card"><div class="row nowrap" style="gap:12px;align-items:flex-start"><span class="tile sm other">${icon('bell')}</span><span class="grow">
       <b>Notifications on this phone</b><p class="small muted" style="margin:2px 0 0">When Sunday's ideas are ready, when Sainsbury's needs the SMS code, and when the basket is ready to approve. Each person turns it on on their own phone.</p></span></div>
       ${iphoneNotInstalled ? `<div class="notice info" style="margin:12px 0 0">${icon('info')}<span class="grow">On iPhone, add Weekly Shop to your home screen first (Share › Add to Home Screen) and turn this on from there.</span></div>` : ''}
       <div style="margin-top:12px">${S.notificationsOn() ? `<div class="row"><span class="chip ok">${icon('check')} On for this phone</span><span class="spacer"></span><button class="btn small outline" data-act="notifyOff">Turn off</button></div>` : `<button class="btn tonal block" data-act="notifyOn">${icon('bell')} Turn on notifications</button>`}</div></div>
+
+    ${section('Order helper')}
+    <div class="card"><b>Trial run</b><p class="small muted" style="margin:2px 0 12px">Checks the whole Sainsbury's order works without buying anything: it logs in (you'll need the SMS code), books a slot, fills the basket with this week's shop, goes to checkout and reads the total, then stops before Place order. Afterwards it takes out what it added and releases the slot.</p>
+      ${activeOrder() ? `<a class="btn outline block" href="#/order">An order is running: view it</a>` : `<button class="btn tonal block" data-act="trialOrder">${icon('cart')} Start a trial run</button>`}</div>
 
     ${section('Prices')}
     <div class="card"><div class="row nowrap" style="gap:12px;align-items:flex-start"><span class="grow"><b>Cheaper swaps</b><p class="small muted" style="margin:2px 0 0">When the basket is filled, swap to a product that's on offer if it's the cheapest of products that are the same thing (same quality, organic or free range kept, brand kept where it matters), going by price per kg, litre or item with offers, Nectar prices and multibuys counted. The swaps are listed before you approve. Your notes below are followed, for example “always Heinz beans”.</p></span>
@@ -797,6 +869,8 @@ function viewSettings() {
     ${section('Account')}
     <div class="card"><div class="row nowrap"><span class="grow small"><span class="muted">Signed in as</span><br><b>${esc(st.user.email)}</b></span><button class="btn outline" data-act="signOut">${icon('logout')} Sign out</button></div></div>`;
 }
+actions.serves = el => run(() => S.updateH([], { serves: Math.max(1, Math.min(20, householdServes() + Number(el.dataset.id))) }));
+actions.trialOrder = () => { if (confirm('Start a trial run? You\'ll need the SMS code from Sainsbury\'s. Nothing is bought.')) startOrder(true); };
 actions.notifyOn = () => run(async () => { await S.enableNotifications(); render(); }, 'Notifications are on for this phone');
 actions.notifyOff = () => run(async () => { await S.disableNotifications(); render(); }, 'Notifications are off for this phone');
 actions.cheaperSwaps = el => run(() => S.updateH([], { cheaperSwaps: el.checked }), el.checked ? 'Cheaper swaps on' : 'Cheaper swaps off');

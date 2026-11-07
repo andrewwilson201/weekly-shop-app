@@ -1,0 +1,91 @@
+{
+ "note": "Made-up staples for the end-to-end test (the real seed holds order history, so it isn't committed).",
+ "staples": [
+  {
+   "product_uid": "9000001",
+   "name": "Sainsbury's Semi skimmed milk 4 pints",
+   "rule": "every_week",
+   "quantity": 2
+  },
+  {
+   "product_uid": "9000002",
+   "name": "Sainsbury's Free range eggs x12",
+   "rule": "every_week",
+   "quantity": 1
+  },
+  {
+   "product_uid": "9000003",
+   "name": "Sainsbury's Wholemeal bread 800g",
+   "rule": "every_week",
+   "quantity": 1
+  },
+  {
+   "product_uid": "9000004",
+   "name": "Sainsbury's Bananas x5",
+   "rule": "every_week",
+   "quantity": 1
+  },
+  {
+   "product_uid": "9000005",
+   "name": "Sainsbury's Easy peelers 600g",
+   "rule": "every_week",
+   "quantity": 1
+  },
+  {
+   "product_uid": "9000006",
+   "name": "Sainsbury's Greek yogurt 500g",
+   "rule": "every_week",
+   "quantity": 1
+  },
+  {
+   "product_uid": "9000007",
+   "name": "Sainsbury's Mature cheddar 400g",
+   "rule": "every_week",
+   "quantity": 1
+  },
+  {
+   "product_uid": "9000008",
+   "name": "Sainsbury's Apple juice 1L",
+   "rule": "every_week",
+   "quantity": 1
+  },
+  {
+   "product_uid": "9000009",
+   "name": "Sainsbury's Cherry tomatoes 250g",
+   "rule": "every_week",
+   "quantity": 1
+  },
+  {
+   "product_uid": "9000010",
+   "name": "Sainsbury's Cucumber",
+   "rule": "every_week",
+   "quantity": 1
+  },
+  {
+   "product_uid": "9000011",
+   "name": "Sainsbury's Butter spreadable 500g",
+   "rule": "every_week",
+   "quantity": 1
+  },
+  {
+   "product_uid": "9000012",
+   "name": "Sainsbury's Porridge oats 1kg",
+   "rule": "every_week",
+   "quantity": 1
+  },
+  {
+   "product_uid": "9000101",
+   "name": "Sainsbury's Basmati rice 1kg",
+   "rule": "suggest",
+   "quantity": 1,
+   "every_days": 21
+  },
+  {
+   "product_uid": "9000102",
+   "name": "Sainsbury's Onions 1kg",
+   "rule": "suggest",
+   "quantity": 1,
+   "every_days": 14
+  }
+ ]
+}

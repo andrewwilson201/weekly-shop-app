@@ -8,7 +8,10 @@
 
 const DAY = 86400000;
 const toDate = s => new Date(`${String(s).slice(0, 10)}T12:00:00Z`);
-export const iso = d => new Date(d).toISOString().slice(0, 10);
+// Dates are UK dates: just after midnight in summer it's already tomorrow in
+// London but still yesterday in UTC. (Dates at noon UTC, as below, are the same day either way.)
+const UK = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' });
+export const iso = d => UK.format(new Date(d));
 export const addDays = (s, n) => iso(toDate(s).getTime() + n * DAY);
 export const daysBetween = (a, b) => Math.round((toDate(b) - toDate(a)) / DAY);
 
@@ -61,7 +64,8 @@ export function toCook({ weeks = {}, orders = [], current }) {
   const out = [];
   for (const w of Object.values(weeks).sort((a, b) => a.id.localeCompare(b.id))) {
     if (w.id > current) continue;
-    const mine = orders.filter(o => o.week === w.id && o.state !== 'cancelled');
+    // A trial run (Settings › Order helper) buys nothing, so it doesn't count.
+    const mine = orders.filter(o => o.week === w.id && o.state !== 'cancelled' && !o.trial);
     const placed = mine.find(o => o.state === 'placed');
     let ids;
     if (placed?.meals?.length) ids = placed.meals;
@@ -77,7 +81,8 @@ export function toCook({ weeks = {}, orders = [], current }) {
 // 10 ideas: favourites (most chosen) first, then meals not had for longest,
 // skipping anything chosen in the last 2 weeks.
 export function pickIdeas(meals, { count = 10, favourites = 4, today = iso(new Date()) } = {}) {
-  const live = meals.filter(m => !m.archived);
+  // Not ones they said they wouldn't make again (unless they changed their mind since).
+  const live = meals.filter(m => !m.archived && !wouldNot(m));
   const recent = m => m.lastChosen && daysBetween(m.lastChosen, today) < 14;
   const favs = live.filter(m => (m.timesChosen || 0) > 0 && !recent(m))
     .sort((a, b) => (b.timesChosen || 0) - (a.timesChosen || 0) || String(a.lastChosen).localeCompare(String(b.lastChosen)))
@@ -89,9 +94,73 @@ export function pickIdeas(meals, { count = 10, favourites = 4, today = iso(new D
   return out.map(m => m.id);
 }
 
+// "Would you make it again?" after cooking (Recipes). verdicts: [{ again, by, on, note }].
+export const lastVerdict = m => (m.verdicts || []).slice(-1)[0] || null;
+export const wouldNot = m => lastVerdict(m)?.again === false;
+
+// Ideas Claude (or a recipe site) suggested stay out of the meal library until
+// someone picks them. Older docs have no idea flag: an unpicked meal added by
+// Claude or a site (addedBy with no uid) counts as an idea.
+export function isIdea(m) {
+  if (m.idea != null) return m.idea === true && !m.timesChosen;
+  return !!m.addedBy && !m.addedBy.uid && !m.timesChosen;
+}
+
+// ---------- Scaling recipes ----------
+// "Serves 4", "4-6", "Makes 12" → the first number, or null.
+export function servesNumber(s) {
+  const m = String(s ?? '').match(/\d+/);
+  const n = m ? Number(m[0]) : null;
+  return n && n <= 30 ? n : null;
+}
+// How much to scale a meal: the number it's cooked for over what the recipe serves.
+export function scaleFor(m, householdServes = 4) {
+  const recipe = servesNumber(m.recipe?.servings || m.servings);
+  const cook = Number(m.cookFor) || Number(householdServes) || null;
+  return recipe && cook ? cook / recipe : 1;
+}
+const FRACTIONS = { '¼': 0.25, '½': 0.5, '¾': 0.75, '⅓': 1 / 3, '⅔': 2 / 3, '⅛': 0.125 };
+function fmtAmount(n) {
+  if (n >= 10) return String(Math.round(n));
+  const whole = Math.floor(n), rest = n - whole;
+  const near = [[0, ''], [0.25, '¼'], [1 / 3, '⅓'], [0.5, '½'], [2 / 3, '⅔'], [0.75, '¾'], [1, '']].reduce((a, b) => Math.abs(b[0] - rest) < Math.abs(a[0] - rest) ? b : a);
+  const w = whole + (near[0] === 1 ? 1 : 0);
+  return `${w || !near[1] ? w : ''}${near[1]}` || '0';
+}
+// Scale the amount at the start of a recipe line: "2 x 400g tins" → "3 x 400g tins",
+// "1½ tbsp oil", "200g flour", "2-3 garlic cloves". Only the leading amount
+// changes, so pack sizes later in the line ("400g") stay as they are.
+export function scaleLine(line, f) {
+  if (!f || Math.abs(f - 1) < 0.01) return line;
+  const num = '(\\d+\\/\\d+|\\d+(?:[.,]\\d+)?(?:\\s*[¼½¾⅓⅔⅛])?|[¼½¾⅓⅔⅛])';
+  const m = String(line).match(new RegExp(`^(\\s*)${num}(?:\\s*[-–]\\s*${num})?`));
+  if (!m) return line;
+  const val = t => {
+    t = t.replace(',', '.').trim();
+    if (t.includes('/')) { const [a, b] = t.split('/').map(Number); return b ? a / b : NaN; }
+    const fr = t.match(/[¼½¾⅓⅔⅛]/);
+    return (parseFloat(t) || 0) + (fr ? FRACTIONS[fr[0]] : 0);
+  };
+  const a = val(m[2]), b = m[3] ? val(m[3]) : null;
+  if (!a || isNaN(a)) return line;
+  const rest = line.slice(m[0].length);
+  // Weights and spoons can be fractions; counts ("3 eggs", "2 x tins") are whole, or a half.
+  const measured = /^\s*(g|kg|ml|l|ltr|litres?|cl|tbsp|tsp|tablespoons?|teaspoons?|cups?|oz|lb|pints?)\b/i.test(rest);
+  const round = n => measured ? (n >= 20 ? String(Math.round(n / 5) * 5) : fmtAmount(n)) : n < 0.5 ? '½' : String(Math.round(n));
+  return `${m[1]}${round(a * f)}${b ? `–${round(b * f)}` : ''}${rest}`;
+}
+// Packs to buy for a scaled meal: rounded, never below 1. Small changes (under
+// a quarter) are ignored, since a pack usually covers a little more or less.
+export function scaleQty(qty = 1, f = 1) {
+  if (!f || Math.abs(f - 1) < 0.25) return qty;
+  return Math.max(1, Math.round(qty * f));
+}
+
 // The week's shop: staples due + ingredients of the chosen meals + shared list items.
 // Lines with the same product (or the same search term) are merged.
-export function buildShop({ staples = [], meals = [], list = [], delivery, extras = {} }) {
+// qtys: { lineKey: n } quantities changed on the Shop screen. serves: how many the
+// household cooks for (meals are scaled from what their recipe serves).
+export function buildShop({ staples = [], meals = [], list = [], delivery, extras = {}, qtys = {}, serves = null }) {
   const lines = [];
   const byKey = new Map();
   const put = (line) => {
@@ -114,17 +183,19 @@ export function buildShop({ staples = [], meals = [], list = [], delivery, extra
     }
   }
   for (const m of meals) {
+    const f = serves ? scaleFor(m, serves) : 1;
     for (const ing of m.ingredients || []) {
       const key = `meal:${m.id}:${ing.item}`;
       // Store-cupboard things (oil, salt, stock...) only when ticked.
       if (extras[key] === false || (ing.pantry && extras[key] !== true)) continue;
-      put({ key, source: 'meal', uid: ing.uid || null, search: ing.search || ing.item, name: ing.item, ...(ing.product ? { product: ing.product, usual: true } : {}), qty: ing.qty || 1, for: [m.name] });
+      put({ key, source: 'meal', uid: ing.uid || null, search: ing.search || ing.item, name: ing.item, ...(ing.product ? { product: ing.product, usual: true } : {}), qty: scaleQty(ing.qty || 1, f), for: [m.name] });
     }
   }
   for (const it of list) {
     if (it.done) continue;
     put({ key: `list:${it.id}`, source: 'list', uid: it.uid || null, search: it.text, name: it.text, ...(it.product ? { product: it.product } : {}), qty: it.qty || 1, listId: it.id });
   }
+  for (const l of lines) if (qtys[l.key] > 0) l.qty = qtys[l.key];
   return lines;
 }
 

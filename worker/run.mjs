@@ -4,6 +4,9 @@
 //   requested → logging_in → need_code (app writes smsCode) → choose_slot (app writes slotChoice)
 //   → filling → review (app writes approvedBy) → placing → placed
 //   any step → failed | cancelled (app writes cancelRequested) | needs_you
+//   A trial order (trial: true, from Settings) goes to Sainsbury's checkout
+//   but stops before Place order → trial_done, then empties what it added.
+//   A run that stops part way is never restarted (see the claim below).
 //
 // Usage:  xvfb-run -a node worker/run.mjs            process waiting orders, then exit
 //         node worker/run.mjs ideas                  make this week's 10 meal ideas if missing
@@ -124,20 +127,26 @@ async function processOrder({ h, ref }) {
   // Claim it so a second worker run doesn't pick it up too.
   const claimed = await db.runTransaction(async t => {
     const d = (await t.get(ref)).data();
-    if (d.state !== 'requested' && d.workerAt && Date.now() - d.workerAt.toMillis() < 5 * 60000) return false;
-    // A run that died part way and was left for hours: don't restart it out of the blue.
-    if (d.state !== 'requested' && (!d.workerAt || Date.now() - d.workerAt.toMillis() > 3 * 3600000)) {
-      t.update(ref, { state: 'failed', message: 'The order helper stopped part way. Check the Sainsbury\'s app, then start again.' });
+    if (d.state !== 'requested') {
+      // Another run is working on it (it updates workerAt every minute).
+      if (d.workerAt && Date.now() - d.workerAt.toMillis() < 5 * 60000) return false;
+      // A run that stopped part way is never restarted: a restart would add
+      // everything to the basket a second time, and must never act on an
+      // approval given for the earlier basket. If it stopped while placing,
+      // the order may well have gone through.
+      t.update(ref, d.state === 'placing'
+        ? { state: 'needs_you', message: 'The order helper stopped while placing the order, so it may have gone through. Check your orders in the Sainsbury\'s app before starting again.' }
+        : { state: 'failed', message: 'The order helper stopped part way. The slot and some items may still be in your Sainsbury\'s basket: check the Sainsbury\'s app, then start again.' });
       return false;
     }
-    t.update(ref, { state: 'logging_in', workerAt: FieldValue.serverTimestamp(), message: FieldValue.delete() });
+    t.update(ref, { state: 'logging_in', workerAt: FieldValue.serverTimestamp(), message: FieldValue.delete(), approvedBy: FieldValue.delete(), approvedTotal: FieldValue.delete() });
     return true;
   });
   if (!claimed) return;
   const heartbeat = setInterval(() => ref.update({ workerAt: FieldValue.serverTimestamp() }).catch(() => {}), 60000);
 
   const shop = await makeShop({ store: h.data().store || '0031', log: m => log(m) });
-  let reserved = false;
+  let reserved = false, slotDate = null;
   try {
     if (order.cancelRequested) throw new Cancelled();
     await shop.open();
@@ -171,7 +180,7 @@ async function processOrder({ h, ref }) {
     await log(`Booked ${choice}`);
 
     // Basket
-    const slotDate = res.slot.start_time.slice(0, 10);
+    slotDate = res.slot.start_time.slice(0, 10);
     const before = await shop.basket();
     if (before?.items?.length) await log(`The basket already had ${before.items.length} items; they're kept`);
     const lines = (await read()).lines || [];
@@ -218,12 +227,16 @@ async function processOrder({ h, ref }) {
     const added = lines.filter(l => l.result === 'added').length;
     await log(`Added ${added} of ${lines.length} lines, total £${total.toFixed(2)}`);
     if (b.has_exceeded_minimum_spend === false) {
+      if (order.trial) throw new Error(`Trial: the basket came to under Sainsbury's £${b.minimum_spend} minimum, so checkout couldn't be tried.`);
       await update({ state: 'needs_you', lines, basket, total, message: `The basket is under Sainsbury's £${b.minimum_spend} minimum, so it can't be ordered yet. Add more in the Sainsbury's app, or cancel.` });
       reserved = false; // leave the slot for them to use
       return;
     }
-    await update({ state: 'review', lines, basket, total });
-    await notify(h, { title: `Basket ready: £${Number(total).toFixed(2)}`, body: 'Check it and tap Approve to place the order.', link: '#/order', tag: 'order' });
+    // Only an approval given for this basket counts.
+    await update({ state: 'review', lines, basket, total, approvedBy: FieldValue.delete(), approvedTotal: FieldValue.delete() });
+    await notify(h, order.trial
+      ? { title: `Trial basket ready: £${Number(total).toFixed(2)}`, body: 'Check it, then tap Check out (trial). Nothing is paid.', link: '#/order', tag: 'order' }
+      : { title: `Basket ready: £${Number(total).toFixed(2)}`, body: 'Check it and tap Approve to place the order.', link: '#/order', tag: 'order' });
 
     // Approval (the slot is held for about 2 hours)
     const holdMins = Math.max(5, (new Date(res.reserved_until) - Date.now()) / 60000 - 5);
@@ -253,11 +266,31 @@ async function processOrder({ h, ref }) {
         // An approval of the old total doesn't count for the new one.
         if (d.approvedBy && Math.abs((d.approvedTotal || 0) - total) > 0.005) { await update({ approvedBy: FieldValue.delete(), approvedTotal: FieldValue.delete() }); return null; }
       }
+      // The approval must be for the total on screen.
+      if (d.approvedBy && Math.abs((d.approvedTotal ?? -1) - total) > 0.005) return null;
       return d.approvedBy;
     }, Math.min(holdMins, 100));
     if (!ok) {
+      if (order.trial) throw new Error('Trial: nobody tapped Check out in time.');
       await update({ state: 'needs_you', message: 'Nobody approved the order in time. The basket and slot are still in your Sainsbury\'s account: check out in the Sainsbury\'s app, or start again here.' });
       reserved = false;
+      return;
+    }
+    if (order.trial) {
+      // Trial run: go all the way to Sainsbury's checkout and read the total,
+      // but don't press Place order. Then take out what was added and let the slot go.
+      await update({ state: 'placing' });
+      await log(`Trial: checking out (won't place the order), asked by ${ok.name}`);
+      let checked = null, why = '';
+      try { checked = await shop.placeOrder(total, { dryRun: true }); } catch (e) { why = e.message; }
+      for (const l of lines) if (l.result === 'added' && l.uid) await shop.remove(l.uid, l.qty || 1, slotDate).catch(() => {});
+      await shop.release().catch(() => {});
+      reserved = false;
+      await update(checked
+        ? { state: 'trial_done', checkoutTotal: checked.total, card: checked.card || '', message: `Trial finished. Everything worked up to Place order: Sainsbury's checkout showed £${Number(checked.total).toFixed(2)}${checked.card ? ` with ${checked.card}` : ''}. Nothing was paid, the items it added were taken out of the basket and the slot was released.` }
+        : { state: 'failed', message: `Trial: the basket was filled, but checkout didn't work: ${why} Nothing was paid; the items it added were taken out and the slot was released.` });
+      await log(checked ? 'Trial finished' : `Trial stopped at checkout: ${why}`);
+      await notify(h, { title: checked ? 'Trial order worked' : 'Trial order stopped at checkout', body: checked ? 'Everything up to Place order worked. Nothing was paid.' : why.slice(0, 150), link: '#/order', tag: 'order' });
       return;
     }
     await update({ state: 'placing' });
@@ -274,8 +307,10 @@ async function processOrder({ h, ref }) {
     await afterPlaced(h, order, lines, res.slot.start_time.slice(0, 10));
   } catch (e) {
     if (e instanceof Cancelled) {
+      // A trial takes out what it added; a real order leaves the basket for the Sainsbury's app.
+      if (order.trial && slotDate) for (const l of (await read()).lines || []) if (l.result === 'added' && l.uid) await shop.remove(l.uid, l.qty || 1, slotDate).catch(() => {});
       if (reserved) await shop.release().catch(() => {});
-      await update({ state: 'cancelled', message: 'Cancelled. The slot was released; anything already in the basket was left there.' });
+      await update({ state: 'cancelled', message: order.trial ? 'Trial cancelled. The slot was released and anything it added was taken out of the basket.' : 'Cancelled. The slot was released; anything already in the basket was left there.' });
       await log('Cancelled');
     } else if (e.code === 'BANK_CHECK') {
       await update({ state: 'needs_you', message: e.message });
@@ -284,7 +319,8 @@ async function processOrder({ h, ref }) {
     } else {
       console.error(process.env.WORKER_QUIET ? `Order stopped: ${e.message}` : e);
       const d = await read().catch(() => ({}));
-      const placing = d.state === 'placing';
+      if (order.trial && slotDate) for (const l of d.lines || []) if (l.result === 'added' && l.uid) await shop.remove(l.uid, l.qty || 1, slotDate).catch(() => {});
+      const placing = d.state === 'placing' && !order.trial;
       if (reserved && !placing) await shop.release().catch(() => {});
       await update({ state: placing ? 'needs_you' : 'failed', message: placing ? `Something went wrong while placing the order: ${e.message} Check the Sainsbury's app before trying again.` : e.message });
       await log(`Stopped: ${e.message}`);

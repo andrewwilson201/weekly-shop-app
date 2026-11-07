@@ -65,7 +65,8 @@ async function makeIdeasInner(h, sunday, madeBy, keep) {
           // A recipe from a site: use the page's own ingredient list when it has one.
           if (i.meal.source) Object.assign(i.meal, await fromPage(i.meal.source));
           const doc = h.ref.collection('meals').doc(); id = doc.id;
-          b.set(doc, { ...i.meal, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: { name: 'Claude' } });
+          // idea: kept out of the meal library until someone picks it.
+          b.set(doc, { ...i.meal, idea: true, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: { name: 'Claude' } });
         }
         if (!offered.includes(id)) offered.push(id);
         if (i.reason) reasons[id] = i.reason;
@@ -130,7 +131,7 @@ async function addSiteRecipes(h, featured, offered, keep, reasons, from) {
       let r;
       try { r = await readRecipe(f.url); } catch (e) { console.log(`Site recipe skipped: ${e.message}`); continue; }
       const doc = h.ref.collection('meals').doc();
-      await doc.set({ name: r.name || f.title, ingredients: r.ingredients, source: f.url, image: r.image || null, servings: r.servings || null, ...(r.recipe ? { recipe: r.recipe } : {}), timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: { name: site } });
+      await doc.set({ name: r.name || f.title, ingredients: r.ingredients, source: f.url, image: r.image || null, servings: r.servings || null, ...(r.recipe ? { recipe: r.recipe } : {}), idea: true, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: { name: site } });
       let at = -1;
       for (let k = offered.length - 1; k >= keep.length; k--) if (!from[offered[k]] && !keep.includes(offered[k])) { at = k; break; }
       if (offered.length >= 10 + keep.length && at >= 0) offered[at] = doc.id; else offered.push(doc.id);

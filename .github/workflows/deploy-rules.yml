@@ -1,0 +1,31 @@
+name: Deploy database rules
+
+# Publishes firestore.rules to the Firebase project whenever it changes on
+# main, so the live rules always match this repo. Uses the same
+# FIREBASE_SERVICE_ACCOUNT key as the site, which needs the Firebase Rules
+# Admin role once (see the README, One-time setup).
+on:
+  push:
+    branches: [main]
+    paths:
+      - firestore.rules
+      - .github/workflows/deploy-rules.yml
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-rules
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Service account key
+        run: printf '%s' "$SA" > "$RUNNER_TEMP/sa.json"
+        env: { SA: "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}" }
+      - run: npx -y firebase-tools@15 deploy --only firestore:rules --project weekly-shop-177b1 --non-interactive
+        env: { GOOGLE_APPLICATION_CREDENTIALS: "${{ runner.temp }}/sa.json" }

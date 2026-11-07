@@ -3,7 +3,9 @@
 // GitHub Actions worker (which still runs every few minutes as a backup).
 // Orders still go through the worker, because they need a real browser, but
 // a new order starts it straight away (GitHub's own timer proved unreliable).
-// Sunday's meal ideas are made here on a Firebase schedule for the same reason.
+// Sunday's meal ideas are made here on a Firebase schedule for the same reason
+// (this is the only place they're made; GitHub's copy was removed so they
+// aren't made twice).
 //
 // Deploy (from Google Cloud Shell or any machine with the Firebase CLI):
 //   firebase functions:secrets:set ANTHROPIC_API_KEY
@@ -86,4 +88,15 @@ export const startOrder = onDocumentCreated({ region: opts.region, document: 'ho
     console.error('Could not start the order worker', res.status, await res.text().catch(() => ''));
     await snap.ref.update({ message: `The order helper didn't start straight away (GitHub said ${res.status}). It will be picked up on GitHub's next timed run.` });
   }
+});
+
+// GitHub switches off a repo's timed workflows after 60 days with no changes,
+// and a switched-off workflow can't be started by startOrder either. Once a
+// week, switch the order worker back on (it does nothing if it's already on).
+export const keepWorkerOn = onSchedule({ region: opts.region, schedule: '0 6 * * 1', timeZone: 'Europe/London', secrets: [WORKER_GITHUB_TOKEN], maxInstances: 1 }, async () => {
+  const res = await fetch(`https://api.github.com/repos/${REPO}/actions/workflows/order-worker.yml/enable`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${WORKER_GITHUB_TOKEN.value()}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'weekly-shop-app' },
+  });
+  if (!res.ok) console.error('Could not keep the order worker on', res.status, await res.text().catch(() => ''));
 });
