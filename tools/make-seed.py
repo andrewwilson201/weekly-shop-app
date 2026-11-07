@@ -1,10 +1,26 @@
 # Makes a seed file for Settings › Import from the old weekly-shop files:
 #   python3 tools/make-seed.py staples-plan.json meal-history.json [shops/*/list.json ...] > seed.json
+# or, for just the products bought before (for "your usual" on the list):
+#   python3 tools/make-seed.py --products orders-no-personal.json > products-seed.json
 # Any list.json files given update last_bought for staples bought since the plan was built.
 # Staples keep their due-rule fields; meal history becomes "times chosen" counts,
 # matched to data/recipes.json by name. The seed has purchase history in it, so
 # don't commit it (it's in .gitignore).
 import json, sys, os
+
+if sys.argv[1] == '--products':
+    # Every product ever ordered: uid, latest name, times bought, last delivery date.
+    products = {}
+    for o in json.load(open(sys.argv[2])):
+        day = (o.get('slot_start_time') or '')[:10]
+        for it in (o.get('detail') or {}).get('order_items') or []:
+            p = it['product']
+            e = products.setdefault(str(p['product_uid']), {'u': str(p['product_uid']), 'n': p['name'], 'c': 0, 'l': ''})
+            e['c'] += 1
+            if day > e['l']:
+                e['l'], e['n'] = day, p['name']
+    json.dump({'products': sorted(products.values(), key=lambda e: e['n'])}, sys.stdout)
+    sys.exit()
 
 plan = json.load(open(sys.argv[1]))
 history = json.load(open(sys.argv[2])) if len(sys.argv) > 2 else {'weeks': []}

@@ -89,6 +89,23 @@ if (seed) {
   await a.screenshot({ path: `${SHOTS}/05-staples.png`, fullPage: true });
 }
 
+// "Your usual": typed list items match products bought before
+await a.goto(`${BASE}#/settings`);
+await a.setInputFiles('input[type=file]', 'test/fixtures/products.json');
+await a.waitForSelector('text=Imported');
+await a.goto(`${BASE}#/list`);
+await a.fill('input[name=text]', 'shampoo'); await a.press('input[name=text]', 'Enter');
+await a.fill('input[name=text]', 'shower gel'); await a.press('input[name=text]', 'Enter');
+await a.waitForSelector('text=Your usual: Head & Shoulders');
+assert(await a.isVisible('text=Your usual: Old Brand Rose Body Wash'), 'shower gel matches a body wash bought before');
+assert(await a.isVisible("li:has-text('Olive oil') >> text=Sainsbury's top match"), 'item never bought before is left to the search');
+await a.click("li:has-text('shampoo') >> button:has-text('Change')");
+await a.waitForSelector('.chooser');
+await a.screenshot({ path: `${SHOTS}/04b-usual.png`, fullPage: true });
+await a.click('.chooser button:has-text("Aussie")');
+await a.waitForSelector('text=Ordering: Aussie Miracle Moist');
+assert(true, 'a different past product can be picked');
+
 // Recipe from a link (the worker reads test/fixtures/recipe.html instead of the web)
 await b.goto(`${BASE}#/meals`);
 await b.fill('input[name=url]', 'https://example.com/recipes/easy-chicken-fajitas');
@@ -159,6 +176,7 @@ await workerDone;
 
 await a.goto(`${BASE}#/list`); await sleep(1000);
 assert(!(await a.isVisible('text=Olive oil')), 'ordered list items cleared');
+assert(!(await a.isVisible('text=shower gel')), 'list item whose usual was gone was ordered via a search');
 assert(await a.isVisible('text=Something that has nothing'), 'unfound list item kept');
 await a.goto(`${BASE}#/week`); await sleep(800);
 assert(await a.isVisible('text=Ordered'), 'week shows as ordered');

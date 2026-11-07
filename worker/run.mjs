@@ -25,7 +25,7 @@ async function makeShop(opts) {
   const { Sainsburys: Real } = await import('./sainsburys.mjs');
   return new Real(opts);
 }
-import { pickIdeas, weekId, iso, daysBetween, awayWeek, SKIPS_TO_SUGGEST, learnStaple } from '../js/plan.js';
+import { pickIdeas, weekId, iso, daysBetween, awayWeek, SKIPS_TO_SUGGEST, learnStaple, recordBought } from '../js/plan.js';
 
 const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
 initializeApp(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: process.env.GCLOUD_PROJECT || 'weekly-shop-177b1' }
@@ -174,7 +174,17 @@ async function processOrder({ h, ref }) {
           if (!hits.length) { line.result = 'not_found'; continue; }
           uid = hits[0].uid; line.uid = uid; line.product = hits[0].name;
         }
-        await shop.add(uid, line.qty || 1, slotDate);
+        try {
+          await shop.add(uid, line.qty || 1, slotDate);
+        } catch (e) {
+          // A usual product from a past order may have been discontinued: fall back to a search.
+          if (!(line.source === 'list' && e.status === 400 && line.search)) throw e;
+          const hits = (await shop.search(line.search)).filter(p => p.available && String(p.uid) !== String(uid));
+          if (!hits.length) throw e;
+          line.uid = hits[0].uid; line.product = hits[0].name;
+          await shop.add(line.uid, line.qty || 1, slotDate);
+          await log(`${line.name}: the usual one wasn't available, so it's ${hits[0].name}`);
+        }
         line.result = 'added';
       } catch (e) {
         line.result = e.status === 400 ? 'unavailable' : `error ${e.status || e.message}`;
@@ -264,6 +274,11 @@ async function afterPlaced(h, order, lines, delivery) {
   }
   for (const id of order.meals || []) b.set(h.ref.collection('meals').doc(id), { timesChosen: FieldValue.increment(1), lastChosen: delivery }, { merge: true });
   b.set(h.ref.collection('weeks').doc(order.week), { status: 'ordered', orderedFor: delivery }, { merge: true });
+  // Everything bought joins the products list, so typed list items find "your usual".
+  const pref = h.ref.collection('meta').doc('products');
+  let products = (await pref.get()).data()?.items || [];
+  for (const l of lines) if (l.result === 'added' && l.uid) products = recordBought(products, l.uid, l.product || l.name, delivery);
+  b.set(pref, { items: products }, { merge: true });
   await b.commit();
 }
 
