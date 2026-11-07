@@ -165,3 +165,32 @@ export async function claudeIngredients(meals, notes = '') {
   return Object.fromEntries((out.meals || []).filter(m => ids.has(m.id)).map(m => [m.id,
     (m.ingredients || []).filter(g => g.item).map(g => ({ item: g.item, qty: Math.max(1, g.qty || 1), search: g.search || g.item, ...(g.pantry ? { pantry: true } : {}) }))]));
 }
+
+// "Your usual" for meal ingredients: for each ingredient, pick the product the
+// household normally buys from its past purchases (free range or organic, the
+// brand they stick to), or none when nothing fits (then the shop's search
+// picks). asks is [{ key, item, candidates: [{ u, n, c, l }] }]. Returns
+// { key: uid }, or null with no key.
+const USUAL_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['picks'],
+  properties: { picks: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['key', 'uid'],
+    properties: { key: { type: 'string' }, uid: { type: 'string', description: 'uid of the chosen past product, or "" if none of them is this ingredient' } } } } },
+};
+export async function claudeUsual(asks) {
+  if (!asks.length) return {};
+  if (process.env.CLAUDE_FAKE) return Object.fromEntries(asks.map(a => [a.key, a.candidates[0].u]));
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const response = await new Anthropic().beta.messages.create({
+    model: MODEL,
+    max_tokens: 8000,
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: USUAL_SCHEMA } },
+    system: `You help fill a family's Sainsbury's basket. Each ingredient comes from a recipe, with products the family has bought before (c = times bought, l = last bought). Pick the product that IS that ingredient and that the family usually buys: keep to their usual quality, origin and brand (for example free range or organic meat if that's what they buy), favouring what they buy often and recently. The product must be the ingredient itself, not something that only contains it: for "garlic" not garlic cream cheese, for "onions" not spring onions or pickled onions, for "parmesan" not a pasta dish. Pack size should suit one family meal. If none of them is the ingredient, return "".`,
+    messages: [{ role: 'user', content: `Ingredients (JSON):\n${JSON.stringify(asks)}\n\nReturn a pick for every key.` }],
+  });
+  if (response.stop_reason === 'refusal' || response.stop_reason === 'max_tokens') throw new Error(`Claude stopped: ${response.stop_reason}`);
+  const out = JSON.parse(response.content.filter(b => b.type === 'text').map(b => b.text).join(''));
+  const ok = new Map(asks.map(a => [a.key, new Set(a.candidates.map(c => String(c.u)))]));
+  return Object.fromEntries((out.picks || []).filter(p => p.uid && ok.get(p.key)?.has(String(p.uid))).map(p => [p.key, String(p.uid)]));
+}

@@ -155,7 +155,7 @@ await a.click('button:has-text("Send to Sainsbury")');
 await a.waitForSelector('text=Starting the order helper');
 
 // Worker with the pretend shop
-const worker = spawn(process.execPath, ['worker/run.mjs'], { env: { ...process.env, SAINSBURYS_FAKE: '1', SAINSBURYS_EMAIL: 'x', SAINSBURYS_PASSWORD: 'y', FIRESTORE_EMULATOR_HOST: 'localhost:8081', WORKER_MINUTES: '5' }, stdio: 'inherit' });
+const worker = spawn(process.execPath, ['worker/run.mjs'], { env: { ...process.env, SAINSBURYS_FAKE: '1', CLAUDE_FAKE: '1', SAINSBURYS_EMAIL: 'x', SAINSBURYS_PASSWORD: 'y', FIRESTORE_EMULATOR_HOST: 'localhost:8081', WORKER_MINUTES: '5' }, stdio: 'inherit' });
 const workerDone = new Promise(r => worker.on('exit', r));
 
 await b.goto(`${BASE}#/order`);
@@ -168,6 +168,7 @@ await a.click('.slots button >> nth=0');
 await a.waitForSelector('button:has-text("Approve £")', { timeout: 30000 });
 await a.screenshot({ path: `${SHOTS}/09-review.png`, fullPage: true });
 assert(await a.isVisible('text=not added'), 'unfound item reported');
+assert(await a.isVisible('text=organic chicken breast'), 'meal ingredient uses the usual product (organic chicken)');
 await a.click('button:has-text("Approve")');
 await a.waitForSelector('text=Order placed', { timeout: 30000 });
 await a.screenshot({ path: `${SHOTS}/10-placed.png`, fullPage: true });

@@ -308,7 +308,7 @@ function shopLines() {
   return buildShop({ staples: st.staples, meals: pickedMeals(), list, delivery: w.deliveryDate || addDays(today(), 2), extras: w.extras || {} });
 }
 const lineRow = l => `<li><input type="checkbox" class="check" checked data-change="lineOff" data-id="${esc(l.key)}" aria-label="Include">
-  <span class="grow"><span class="name">${esc(l.name)}${l.qty > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span>${l.for ? `<span class="meta">${esc(l.for.join(' · '))}</span>` : l.product ? `<span class="meta">${esc(l.product)}</span>` : ''}</span></li>`;
+  <span class="grow"><span class="name">${esc(l.name)}${l.qty > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span>${l.product ? `<span class="meta">${esc(l.product)}</span>` : ''}${l.for ? `<span class="meta">${esc(l.for.join(' · '))}</span>` : ''}</span></li>`;
 function viewShop() {
   const w = week();
   const order = activeOrder();

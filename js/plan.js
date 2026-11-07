@@ -92,7 +92,7 @@ export function buildShop({ staples = [], meals = [], list = [], delivery, extra
       const key = `meal:${m.id}:${ing.item}`;
       // Store-cupboard things (oil, salt, stock...) only when ticked.
       if (extras[key] === false || (ing.pantry && extras[key] !== true)) continue;
-      put({ key, source: 'meal', uid: ing.uid || null, search: ing.search || ing.item, name: ing.item, qty: ing.qty || 1, for: [m.name] });
+      put({ key, source: 'meal', uid: ing.uid || null, search: ing.search || ing.item, name: ing.item, ...(ing.product ? { product: ing.product, usual: true } : {}), qty: ing.qty || 1, for: [m.name] });
     }
   }
   for (const it of list) {
@@ -156,4 +156,14 @@ export function recordBought(products = [], uid, name, date) {
   if (i >= 0) out[i] = { ...out[i], n: name || out[i].n, c: (out[i].c || 0) + 1, l: date > (out[i].l || '') ? date : out[i].l };
   else out.push({ u: String(uid), n: name || '', c: 1, l: date });
   return out;
+}
+
+// Past products that might be a recipe ingredient, for Claude to choose from:
+// ones matching all its words, then ones matching its last word ("Baby
+// potatoes" also offers the other potatoes they buy).
+export function usualCandidates(item, products = [], max = 15) {
+  const w = words(item);
+  const out = [...matchUsual(item, products, max)];
+  if (w.length > 1) for (const p of matchUsual(w[w.length - 1], products, max)) if (!out.includes(p)) out.push(p);
+  return out.slice(0, max);
 }
