@@ -1,0 +1,41 @@
+name: Deploy functions
+
+# Redeploys the Firebase functions (Ask Claude for ideas, Sunday ideas,
+# recipe links, missing ingredients, starting orders) whenever code they use
+# changes on main. The FIREBASE_SERVICE_ACCOUNT key needs the extra roles in
+# the README (One-time setup › Functions deploy).
+on:
+  push:
+    branches: [main]
+    paths:
+      - functions/**
+      - worker/jobs.mjs
+      - worker/ideas-claude.mjs
+      - worker/recipe.mjs
+      - worker/feeds.mjs
+      - worker/notify.mjs
+      - js/plan.js
+      - tools/copy-shared.mjs
+      - firebase.json
+      - .github/workflows/deploy-functions.yml
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-functions
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm --prefix functions ci
+      - name: Service account key
+        run: printf '%s' "$SA" > "$RUNNER_TEMP/sa.json"
+        env: { SA: "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}" }
+      # --force: answer yes to the CLI's questions (e.g. the container image clean-up policy).
+      - run: npx -y firebase-tools@15 deploy --only functions --project weekly-shop-177b1 --non-interactive --force
+        env: { GOOGLE_APPLICATION_CREDENTIALS: "${{ runner.temp }}/sa.json" }

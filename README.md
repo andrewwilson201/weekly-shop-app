@@ -61,7 +61,16 @@ firebase functions:secrets:set WORKER_GITHUB_TOKEN
 firebase deploy --only functions
 ```
 
-The functions run in `europe-west2` (London), next to the database. Redeploy after changing `worker/jobs.mjs`, `worker/ideas-claude.mjs`, `worker/recipe.mjs`, `js/plan.js` or `functions/`.
+The functions run in `europe-west2` (London), next to the database. After that first deploy, the `Deploy functions` workflow redeploys them whenever a merge to `main` changes code they use (`functions/`, `worker/jobs.mjs`, `worker/ideas-claude.mjs`, `worker/recipe.mjs`, `worker/feeds.mjs`, `worker/notify.mjs`, `js/plan.js`). It uses the same `FIREBASE_SERVICE_ACCOUNT` key as the site, which needs these extra roles once (run in Cloud Shell):
+
+```sh
+SA=$(gcloud iam service-accounts list --project weekly-shop-177b1 --filter="email~firebase-adminsdk" --format="value(email)")
+for r in cloudfunctions.admin run.admin eventarc.admin cloudscheduler.admin iam.serviceAccountUser secretmanager.admin artifactregistry.admin serviceusage.serviceUsageConsumer; do
+  gcloud projects add-iam-policy-binding weekly-shop-177b1 --member="serviceAccount:$SA" --role="roles/$r" --condition=None --quiet > /dev/null && echo "added $r"
+done
+```
+
+To redeploy by hand: Actions › Deploy functions › Run workflow, or `firebase deploy --only functions` as above.
 
 ## Run locally and test
 
