@@ -258,7 +258,8 @@ function londonDate(t) {
 // Anything it can't match is left to the shop's search.
 async function pickUsual(h, lines, log) {
   const products = (await h.ref.collection('meta').doc('products').get()).data()?.items || [];
-  const asks = lines.filter(l => l.source === 'meal' && !l.uid)
+  // A pick saved from an earlier order is asked again, so a switch to another product is learned.
+  const asks = lines.filter(l => l.source === 'meal' && (!l.uid || l.usual))
     .map(l => ({ key: l.key, item: l.name, candidates: usualCandidates(l.name, products).map(({ u, n, c, l: last }) => ({ u, n, c, l: last })) }))
     .filter(a => a.candidates.length);
   if (!asks.length) return;
