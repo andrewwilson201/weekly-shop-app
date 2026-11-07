@@ -580,7 +580,8 @@ const HERO = {
 function viewOrder() {
   const o = arg ? st.orders.find(x => x.id === arg) : (activeOrder() || st.orders[0]);
   if (!o) return head('Order') + empty('cart', 'No orders yet', 'Build the shop and tap Order to start one.', '<a class="btn primary" href="#/shop">Go to the shop</a>');
-  const idx = STEPS.findIndex(s => s[0] === o.state);
+  // A stopped order shows how far it got (stoppedAt: the step it was on).
+  const idx = STEPS.findIndex(s => s[0] === (['failed', 'needs_you'].includes(o.state) && o.stoppedAt ? o.stoppedAt : o.state));
   const [hic, htone, htitle, hsub] = o.trial && o.state === 'review' ? ['bag', 'warn', 'Check the basket', 'Then tap Check out to try Sainsbury\'s checkout. Nothing is paid.'] : HERO[o.state] || HERO.requested;
   let html = head(`${o.trial ? 'Trial order' : 'Order'} for ${fmtDay(o.deliveryDate, { weekday: 'long', day: 'numeric', month: 'short' })}`, { eyebrow: o.trial ? 'Trial run · nothing is paid' : 'Sainsbury\'s order', sub: `Started by ${esc(o.requestedBy?.name)}${o.slot ? ` · delivery ${fmtTime(o.slot.start_time)}–${fmtTime(o.slot.end_time)}` : ''}` }) + (o.week === thisWeekId() && !o.trial ? flow('order') : '');
   if (o.trial && !DONE_STATES.includes(o.state)) html += `<div class="notice info">${icon('info')}<span class="grow"><b>Trial run.</b> It does everything a real order does up to Sainsbury's Place order button, then stops. Afterwards it takes out what it added and releases the slot.</span></div>`;

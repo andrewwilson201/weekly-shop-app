@@ -322,8 +322,10 @@ async function processOrder({ h, ref }) {
       if (order.trial && slotDate) for (const l of d.lines || []) if (l.result === 'added' && l.uid) await shop.remove(l.uid, l.qty || 1, slotDate).catch(() => {});
       const placing = d.state === 'placing' && !order.trial;
       if (reserved && !placing) await shop.release().catch(() => {});
-      await update({ state: placing ? 'needs_you' : 'failed', message: placing ? `Something went wrong while placing the order: ${e.message} Check the Sainsbury's app before trying again.` : e.message });
-      await log(`Stopped: ${e.message}`);
+      // Sainsbury's own words go on the order screen only (the Actions log is public).
+      const msg = e.detail && !e.message.includes(e.detail) ? `${e.message} (Sainsbury's said: ${e.detail})` : e.message;
+      await update({ state: placing ? 'needs_you' : 'failed', stoppedAt: d.state || null, message: placing ? `Something went wrong while placing the order: ${msg} Check the Sainsbury's app before trying again.` : msg });
+      await log(`Stopped: ${msg}`);
     }
   } finally {
     clearInterval(heartbeat);

@@ -78,7 +78,13 @@ export class Sainsburys {
       return { status: r.status, text };
     }, { url: url.toString(), method, body, token, override });
     let data = null; try { data = res.text ? JSON.parse(res.text) : null; } catch { data = res.text; }
-    if (res.status >= 400) { const e = new Error(`${method} ${path} → ${res.status}`); e.status = res.status; e.data = data; throw e; }
+    if (res.status >= 400) {
+      const e = new Error(`${method} ${path} → ${res.status}`); e.status = res.status; e.data = data;
+      // What Sainsbury's said, for the order screen (kept out of the public Actions log).
+      const said = typeof data === 'string' ? data : data?.errors?.[0]?.message || data?.errors?.[0]?.detail || data?.message || data?.error?.message || data?.error_description || data?.errors?.[0]?.code || (data ? JSON.stringify(data) : '');
+      e.detail = String(said || '').replace(/\s+/g, ' ').slice(0, 300);
+      throw e;
+    }
     return data;
   }
 
@@ -110,7 +116,20 @@ export class Sainsburys {
   }
 
   async reserve(slot) {
-    const d = await this.api('POST', '/slot/v1/slot/reservation', { body: { booking_key: slot.booking_key, changes_confirmed: false, new_slot_date: slot.start_time, new_store_number: this.store } });
+    const book = changes_confirmed => this.api('POST', '/slot/v1/slot/reservation', { body: { booking_key: slot.booking_key, changes_confirmed, new_slot_date: slot.start_time, new_store_number: this.store } });
+    let d;
+    try { d = await book(false); }
+    catch (e) {
+      // Sainsbury's asks to confirm changes when the account already has a slot
+      // or a basket the new slot affects: confirm once, then give up.
+      if (e.status !== 400) throw e;
+      this.log(`Booking said: ${e.detail || 'no reason given'}; trying again with the change confirmed`);
+      try { d = await book(true); }
+      catch (e2) {
+        const err = new Error(`Sainsbury's wouldn't book that slot${e2.detail || e.detail ? `: ${e2.detail || e.detail}` : '.'}`);
+        err.status = e2.status; err.detail = e2.detail; throw err;
+      }
+    }
     if (d?.status !== 'success') throw new Error('Sainsbury\'s wouldn\'t book that slot.');
     return d.reservation;
   }
