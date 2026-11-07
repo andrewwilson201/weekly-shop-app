@@ -1,6 +1,6 @@
 import * as S from './store.js';
-import { weekId, iso, addDays, buildShop, stapleStatus, pickIdeas, awayOn, awayWeek, skipRule, matchUsual, toCook, isIdea, lastVerdict, servesNumber, scaleFor, scaleLine } from './plan.js?v=7';
-import { icon, tile, avatar, MEAL_CATEGORIES, mealCategory, autoCategory, categoryTile } from './ui.js?v=7';
+import { weekId, iso, addDays, buildShop, stapleStatus, pickIdeas, awayOn, awayWeek, skipRule, matchUsual, toCook, isIdea, lastVerdict, servesNumber, scaleFor, scaleLine } from './plan.js?v=8';
+import { icon, tile, avatar, MEAL_CATEGORIES, mealCategory, autoCategory, categoryTile } from './ui.js?v=8';
 
 const $main = document.getElementById('main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

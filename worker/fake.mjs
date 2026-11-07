@@ -26,7 +26,10 @@ export class FakeSainsburys {
     }
     return out;
   }
-  async reserve(slot) { return { reserved_until: new Date(Date.now() + 2 * 36e5).toISOString(), slot }; }
+  async reserve(slot) {
+    // FAKE_SLOT_GONE=1: the first slot picked has just gone, as happens on the real site.
+    if (process.env.FAKE_SLOT_GONE && !this.goneOnce) { this.goneOnce = true; const e = new Error('POST /slot/v1/slot/reservation → 400'); e.status = 400; e.detail = 'Sorry this slot is no longer available.'; throw e; }
+    return { reserved_until: new Date(Date.now() + 2 * 36e5).toISOString(), slot }; }
   async release() {}
   async basket() {
     const subtotal = this.items.reduce((t, i) => t + i.subtotal_price, 0);

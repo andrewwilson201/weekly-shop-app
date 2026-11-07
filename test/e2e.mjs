@@ -331,11 +331,17 @@ await a.goto(`${BASE}#/settings`);
 await a.click('button:has-text("Start a trial run")');
 await a.waitForSelector('text=Trial run · nothing is paid');
 {
-  const w2 = spawn(process.execPath, ['worker/run.mjs'], { env: { ...process.env, SAINSBURYS_FAKE: '1', CLAUDE_FAKE: '1', SAINSBURYS_EMAIL: 'x', SAINSBURYS_PASSWORD: 'y', FIRESTORE_EMULATOR_HOST: 'localhost:8081', WORKER_MINUTES: '5' }, stdio: 'inherit' });
+  const w2 = spawn(process.execPath, ['worker/run.mjs'], { env: { ...process.env, FAKE_SLOT_GONE: '1', SAINSBURYS_FAKE: '1', CLAUDE_FAKE: '1', SAINSBURYS_EMAIL: 'x', SAINSBURYS_PASSWORD: 'y', FIRESTORE_EMULATOR_HOST: 'localhost:8081', WORKER_MINUTES: '5' }, stdio: 'inherit' });
   const w2Done = new Promise(r => w2.on('exit', r));
   await a.waitForSelector('input.code', { timeout: 30000 });
   await a.fill('input.code', '123456'); await a.click('text=Send code');
   await a.waitForSelector('.slots button', { timeout: 30000 });
+  const firstSlots = await a.locator('.slots button').count();
+  await a.click('.slots button >> nth=0');
+  // That slot has just gone: the others are offered again.
+  await a.waitForSelector('text=that slot has just gone', { timeout: 30000 });
+  await a.waitForSelector('.slots button:not([disabled])');
+  assert(await a.locator('.slots button').count() === firstSlots - 1, 'a slot that has gone is dropped and the rest offered again');
   await a.click('.slots button >> nth=0');
   await a.waitForSelector('button:has-text("Check out (trial")', { timeout: 30000 });
   await a.screenshot({ path: `${SHOTS}/17-trial-review.png`, fullPage: true });
