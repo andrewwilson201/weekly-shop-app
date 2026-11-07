@@ -133,6 +133,13 @@ await new Promise(r => spawn(process.execPath, ['worker/run.mjs', 'check'], { en
 await a.waitForSelector('text=Pretend new dish', { timeout: 15000 });
 assert(await a.isVisible('text=New on The Guardian'), "one idea from the Guardian's recipes this week");
 assert(await a.isVisible('text=Pretend theguardian.com recipe'), 'the recipe site idea is shown');
+{
+  const card = a.locator('.meal', { hasText: 'Pretend theguardian.com recipe' });
+  await a.evaluate(() => { window.opened = []; window.open = u => { window.opened.push(u); }; });
+  await card.locator('[data-act=openRecipe]').click();
+  assert((await a.evaluate(() => window.opened))[0] === 'https://theguardian.com/recipes/squash-curry', 'Open recipe opens the recipe page');
+  assert(!(await card.evaluate(el => el.classList.contains('on'))), 'opening the recipe does not pick the meal');
+}
 assert(await a.isVisible('text=New from Claude'), 'new dish from Claude added to the ideas');
 assert(await a.isVisible('text=Because you liked'), 'Claude reasons shown');
 assert((await a.$$('.meal.on')).length === picksBefore, 'picks kept when Claude refreshes ideas');

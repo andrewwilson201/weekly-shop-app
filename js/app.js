@@ -201,7 +201,7 @@ function viewWeek() {
       ${tile(m)}
       <span class="grow"><span class="title">${esc(m.name)}</span>
       ${w.reasons?.[id] ? `<span class="why">${esc(w.reasons[id])}</span>` : ''}
-      <span class="chips">${tag}${m.cuisine ? `<span class="chip outline">${esc(m.cuisine)}</span>` : ''}${p ? `<span class="chip ok">${avatar(p, 'sm')} ${esc(p.name?.split(' ')[0] || '')}</span>` : ''}</span></span>
+      <span class="chips">${tag}${/^https?:\/\//.test(m.source || '') ? `<span class="chip link" data-act="openRecipe" data-id="${esc(m.source)}" role="link" title="Open the recipe on ${esc(hostOf(m.source))}">${icon('link')} Open recipe</span>` : ''}${m.cuisine ? `<span class="chip outline">${esc(m.cuisine)}</span>` : ''}${p ? `<span class="chip ok">${avatar(p, 'sm')} ${esc(p.name?.split(' ')[0] || '')}</span>` : ''}</span></span>
       <span class="tick">${icon('check')}</span></button>`;
   });
   html += `<div class="toolbar">
@@ -223,6 +223,8 @@ function viewWeek() {
     <a class="btn primary" href="#/shop">Next: the shop ${icon('chevron')}</a></div></div>`;
   return html;
 }
+// The "Open recipe" chip sits inside the meal's pick button; the click handler finds the chip first, so it doesn't pick.
+actions.openRecipe = el => { if (/^https?:\/\//.test(el.dataset.id)) window.open(el.dataset.id, '_blank', 'noopener'); };
 actions.loadStarter = () => run(async () => {
   const res = await fetch('data/recipes.json'); const { meals } = await res.json();
   await S.batchH(meals.map(m => ['add', ['meals'], { ...m, timesChosen: 0, createdAt: S.serverTimestamp() }]));
