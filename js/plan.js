@@ -48,6 +48,32 @@ export function stapleStatus(s, delivery) {
   return rule === 'suggest' ? 'suggest' : 'add';
 }
 
+// Dinners to cook, for the Recipes screen. Each dinner stays there until
+// someone marks it cooked (or not making it), so last week's are still there
+// after the next week's shop has been ordered. Which weeks count:
+//   this week: its picks, ordered or not yet;
+//   earlier weeks: the dinners of an order that went ahead (any order that
+//   wasn't cancelled; a failed one may have been finished in Sainsbury's app).
+//   Earlier weeks with no order at all are left out, since nothing was bought.
+// weeks: { id: week doc }, orders: order docs, current: this week's id.
+// Returns [{ week, mealId, ordered, delivery, done }], oldest week first.
+export function toCook({ weeks = {}, orders = [], current }) {
+  const out = [];
+  for (const w of Object.values(weeks).sort((a, b) => a.id.localeCompare(b.id))) {
+    if (w.id > current) continue;
+    const mine = orders.filter(o => o.week === w.id && o.state !== 'cancelled');
+    const placed = mine.find(o => o.state === 'placed');
+    let ids;
+    if (placed?.meals?.length) ids = placed.meals;
+    else if (w.id === current || mine.length || w.status === 'ordered') ids = Object.keys(w.picks || {});
+    else continue;
+    for (const id of ids) {
+      out.push({ week: w.id, mealId: id, ordered: !!placed || w.status === 'ordered', delivery: placed?.deliveryDate || w.orderedFor || w.deliveryDate || null, done: w.cooked?.[id] || null });
+    }
+  }
+  return out;
+}
+
 // 10 ideas: favourites (most chosen) first, then meals not had for longest,
 // skipping anything chosen in the last 2 weeks.
 export function pickIdeas(meals, { count = 10, favourites = 4, today = iso(new Date()) } = {}) {

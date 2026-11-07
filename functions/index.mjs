@@ -1,4 +1,4 @@
-// Firebase functions: run "Ask Claude for ideas", recipe links and missing
+// Firebase functions: run "Ask Claude for ideas", recipe links, recipe methods and missing
 // ingredient lists as soon as the app asks, instead of waiting for the
 // GitHub Actions worker (which still runs every few minutes as a backup).
 // Orders still go through the worker, because they need a real browser, but
@@ -50,6 +50,13 @@ export const recipeLink = onDocumentCreated({ ...opts, document: 'households/{hi
 export const newMeal = onDocumentCreated({ ...opts, document: 'households/{hid}/meals/{mid}' }, withKey(async event => {
   if ((event.data?.data()?.ingredients || []).length) return;
   await jobs.fillIngredients(await household(event.params.hid), event.data.ref);
+}));
+
+// "Get the recipe": a meal picked or opened on Recipes with no method saved.
+export const mealRecipe = onDocumentWritten({ ...opts, document: 'households/{hid}/meals/{mid}' }, withKey(async event => {
+  const after = event.data?.after;
+  if (after?.data()?.recipeRequested !== true || event.data.before?.data()?.recipeRequested === true) return;
+  await jobs.fillRecipe(await household(event.params.hid), after.ref);
 }));
 
 // Sunday 07:30 UK time: make each household's ideas for the week and tell

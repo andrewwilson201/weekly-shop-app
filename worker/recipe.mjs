@@ -10,8 +10,8 @@ const UNITS = String.raw`(?:kg|g|grams?|mg|ml|millilitres?|l|litres?|liters?|cl|
 const PANTRY = /^(sea |table |flaky |rock |kosher )?salt\b|black pepper|white pepper|^pepper$|salt and (black )?pepper|^(extra[- ]virgin |light |mild )?olive oil|vegetable oil|sunflower oil|rapeseed oil|cooking oil|groundnut oil|^oil\b|^water\b|boiling water|cold water|^ice\b|^(caster |granulated |golden caster )?sugar$|^plain flour$|^self[- ]raising flour$|^cornflour$|stock cubes?|stock pots?|^stock$|^bay leaf|^bay leaves|cooking spray|^vinegar$|ground cumin|ground coriander|paprika|chilli flakes|dried oregano|dried thyme|dried mixed herbs|garam masala|ground cinnamon|bicarbonate|baking powder|^honey$|soy sauce|worcestershire sauce|tomato pur[eé]e/i;
 
 const decode = s => String(s ?? '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;|&apos;|&#x27;/g, "'").replace(/&nbsp;|&#160;/g, ' ')
-  .replace(/&frac12;/g, '½').replace(/&frac14;/g, '¼').replace(/&frac34;/g, '¾').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-  .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  .replace(/&frac12;/g, '½').replace(/&frac14;/g, '¼').replace(/&frac34;/g, '¾').replace(/&ndash;/g, '–').replace(/&mdash;/g, '—').replace(/&deg;/g, '°').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16))).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
 
 function num(s) {
   if (!s) return null;
@@ -62,12 +62,35 @@ function walk(node, out) {
   if (node.mainEntity) walk(node.mainEntity, out);
 }
 
+// recipeInstructions comes as one string, a list of strings, HowToStep
+// objects ({ text }), or HowToSections holding steps.
+function steps(node) {
+  if (!node) return [];
+  if (typeof node === 'string') {
+    const t = node.replace(/<\/(p|li)>|<br\s*\/?>/gi, '\n');
+    return t.split(/\n+/).map(decode).filter(Boolean);
+  }
+  if (Array.isArray(node)) return node.flatMap(steps);
+  if (node.itemListElement) return steps(node.itemListElement);
+  return steps(node.text || node.name || '');
+}
+
+// ISO 8601 durations ("PT1H15M") as "1 hr 15 min".
+export function duration(s) {
+  const m = String(s || '').match(/^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?/i);
+  if (!m) return '';
+  const mins = (+m[1] || 0) * 1440 + (+m[2] || 0) * 60 + (+m[3] || 0);
+  if (!mins) return '';
+  const h = Math.floor(mins / 60), r = mins % 60;
+  return [h ? `${h} hr` : '', r ? `${r} min` : ''].filter(Boolean).join(' ');
+}
+
 export function extractRecipe(html, url = '') {
   const recipes = [];
   for (const m of html.matchAll(/<script[^>]*type=["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script>/gi)) {
     try { walk(JSON.parse(m[1].trim()), recipes); } catch { /* some sites put invalid JSON here */ }
   }
-  let name, ingredients = [], image, servings;
+  let name, ingredients = [], image, servings, method = [], time = '';
   const r = recipes.find(x => x.recipeIngredient || x.ingredients) || recipes[0];
   if (r) {
     name = decode(r.name || r.headline || '');
@@ -75,6 +98,8 @@ export function extractRecipe(html, url = '') {
     const img = [].concat(r.image || [])[0];
     image = typeof img === 'string' ? img : img?.url;
     servings = decode([].concat(r.recipeYield || [])[0] || '');
+    method = steps(r.recipeInstructions).filter((x, i, a) => a.indexOf(x) === i);
+    time = duration(r.totalTime) || duration(r.cookTime);
   }
   if (!ingredients.length) {
     // Microdata fallback: itemprop="recipeIngredient" / "ingredients"
@@ -85,7 +110,7 @@ export function extractRecipe(html, url = '') {
     const t = decode((html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i) || html.match(/<title>([^<]+)/i) || [])[1] || url);
     name = t.replace(/\s+[|–-]\s+[^|–-]+$/, '').trim() || t;
   }
-  return { name, ingredients, image, servings };
+  return { name, ingredients, image, servings, method, time };
 }
 
 export async function fetchRecipe(url) {
@@ -100,5 +125,12 @@ export async function fetchRecipe(url) {
     const k = ing.item.toLowerCase();
     if (seen.has(k)) seen.get(k).qty += ing.qty > 1 ? ing.qty : 0; else seen.set(k, ing);
   }
-  return { ...r, ingredients: [...seen.values()] };
+  return { ...r, ingredients: [...seen.values()], recipe: recipeFrom(r) };
+}
+
+// What the app's recipe screen shows: the page's own ingredient lines (with
+// amounts) and method. Saved on the meal as `recipe`.
+export function recipeFrom(r) {
+  if (!r.method?.length) return null;
+  return { lines: r.ingredients.map(x => typeof x === 'string' ? x : x.line || x.item), steps: r.method, ...(r.servings ? { servings: r.servings } : {}), ...(r.time ? { time: r.time } : {}), by: 'page' };
 }

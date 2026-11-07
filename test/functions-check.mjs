@@ -41,6 +41,14 @@ const imp = await h.collection('imports').add({ url: 'https://example.invalid/',
 await fns.recipeLink.run({ data: await imp.get(), params: { hid: 'fn-test', iid: imp.id } });
 assert((await imp.get()).data().state === 'failed', 'recipe link handled');
 
+// "Get the method": a picked meal with no method gets one written (pretend Claude), once.
+const cook = h.collection('meals').doc(meals[1].id);
+const cookBefore = await cook.get();
+await cook.update({ recipeRequested: true });
+await fns.mealRecipe.run({ data: { before: cookBefore, after: await cook.get() }, params: { hid: 'fn-test', mid: cook.id } });
+const cooked = (await cook.get()).data();
+assert(cooked.recipe?.steps?.length && cooked.recipe.by === 'claude' && !cooked.recipeRequested, 'a meal with no method gets one from Claude');
+
 // A new order starts the GitHub worker at once (GitHub's API is stubbed here).
 const calls = [];
 const realFetch = globalThis.fetch;

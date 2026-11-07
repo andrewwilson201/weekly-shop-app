@@ -37,3 +37,20 @@ test('ingredient lines become shop items', () => {
     assert.equal(r.search, `sainsburys ${item.toLowerCase()}`);
   }
 });
+
+test('keeps the method and time for the Recipes screen', async () => {
+  const { recipeFrom, duration } = await import('../worker/recipe.mjs');
+  const r = extractRecipe(readFileSync(new URL('./fixtures/recipe.html', import.meta.url), 'utf8'));
+  assert.deepEqual(r.method, ['Toss the chicken with the paprika and oil.', 'Fry the chicken, onion and peppers for 8–10 mins until cooked through.', 'Warm the tortillas and serve with the beans, soured cream, lime and coriander.']);
+  assert.equal(r.time, '35 min');
+  const rec = recipeFrom(r);
+  assert.equal(rec.lines[0], '2 chicken breasts, sliced into strips');
+  assert.equal(rec.steps.length, 3);
+  assert.equal(rec.by, 'page');
+  assert.equal(duration('PT1H15M'), '1 hr 15 min');
+  assert.equal(duration(''), '');
+  // A single string with paragraphs, as some sites give it.
+  const html = '<script type="application/ld+json">{"@type":"Recipe","name":"Soup","recipeIngredient":["1 onion"],"recipeInstructions":"<p>Chop the onion.</p><p>Simmer for 20 mins.</p>"}</script>';
+  assert.deepEqual(extractRecipe(html).method, ['Chop the onion.', 'Simmer for 20 mins.']);
+  assert.equal(recipeFrom(extractRecipe('<script type="application/ld+json">{"@type":"Recipe","recipeIngredient":["1 onion"]}</script>')), null);
+});
