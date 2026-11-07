@@ -22,9 +22,10 @@ const SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['existing_id', 'name', 'reason', 'protein', 'cuisine', 'tags', 'ingredients'],
+        required: ['existing_id', 'recipe_url', 'name', 'reason', 'protein', 'cuisine', 'tags', 'ingredients'],
         properties: {
           existing_id: { type: 'string', description: 'id of a meal from the library, or "" for a new dish' },
+          recipe_url: { type: 'string', description: 'For a recipe from the "New on their recipe sites" list: its url, exactly as given. Otherwise ""' },
           name: { type: 'string' },
           reason: { type: 'string', description: 'One short sentence for the family on why this is suggested this week' },
           protein: { type: 'string', enum: PROTEINS, description: 'The main protein' },
@@ -65,10 +66,14 @@ Variety matters as much as taste. These rules are firm:
 
 For every new dish, list the ingredients to buy for that dinner for the whole household, as Sainsbury's shop items. Mark store-cupboard basics as pantry.
 
+When the message lists recipes newly published on the family's chosen recipe sites, include exactly one from each site (the one that best suits this family) as a new dish, with recipe_url set to its url and the name as published. These count towards the new dishes and the variety rules; list their ingredients as for any new dish.
+
 Respect any notes about the household (ages, dislikes, allergies, how adventurous they are). Write each reason as one short, friendly sentence addressed to the family.`;
 
-export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '', season = '' }) {
-  if (process.env.CLAUDE_FAKE) return fakeIdeas(meals); // tests: no API call
+// featured: recipes newly published on the household's recipe sites
+// ([{ source, title, url, published, summary }]); one per site is asked for.
+export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '', season = '', featured = [] }) {
+  if (process.env.CLAUDE_FAKE) return fakeIdeas(meals, featured); // tests: no API call
   if (!process.env.ANTHROPIC_API_KEY) return null;
   const client = new Anthropic();
   const byId = new Map(meals.map(m => [m.id, m]));
@@ -88,6 +93,7 @@ export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '
     `Meal library (JSON):\n${JSON.stringify(library)}`,
     `Recent weeks, newest first (JSON):\n${JSON.stringify(history)}`,
     offeredRecently.length ? `Offered in the last 3 weeks: ${offeredRecently.join('; ')}` : '',
+    featured.length ? `New on their recipe sites in the last week (JSON):\n${JSON.stringify(featured.map(f => ({ site: f.source, title: f.title, url: f.url, published: f.published?.slice(0, 10), summary: f.summary })))}` : '',
     skippedStaples.length ? `Regular items they've been leaving out of the shop lately: ${skippedStaples.join(', ')}` : '',
     'Give exactly 10 ideas, following the variety rules. Use existing_id for library meals (with an empty ingredients list), and "" for new dishes.',
   ].filter(Boolean).join('\n\n');
@@ -104,16 +110,18 @@ export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '
   if (response.stop_reason === 'refusal' || response.stop_reason === 'max_tokens') throw new Error(`Claude stopped: ${response.stop_reason}`);
   const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('');
   const ideas = JSON.parse(text).ideas;
-  return validate(ideas, byId);
+  return validate(ideas, byId, featured);
 }
 
 // Keep only usable ideas: real library ids, or new dishes with ingredients. No duplicates.
-export function validate(ideas, byId) {
+export function validate(ideas, byId, featured = []) {
+  const feedUrls = new Map(featured.map(f => [f.url, f]));
   const out = []; const seen = new Set(); const perProtein = {};
   for (const i of ideas || []) {
     // Enforce the protein rule here too, in case the answer breaks it; the caller tops up.
     const p = i.protein === 'vegan' ? 'vegetarian' : i.protein;
-    if (p && (perProtein[p] || 0) >= MAX_PER_PROTEIN + (p === 'vegetarian' ? 1 : 0)) continue;
+    // The recipe-site picks always stay: they're the point of that setting.
+    if (p && !feedUrls.has(i.recipe_url) && (perProtein[p] || 0) >= MAX_PER_PROTEIN + (p === 'vegetarian' ? 1 : 0)) continue;
     const before = out.length;
     if (i.existing_id && byId.has(i.existing_id)) {
       if (seen.has(i.existing_id)) continue;
@@ -121,7 +129,13 @@ export function validate(ideas, byId) {
     } else if (!i.existing_id && i.name && i.ingredients?.length) {
       const dup = [...byId.values()].find(m => m.name.toLowerCase() === i.name.toLowerCase());
       if (dup) { if (!seen.has(dup.id)) { seen.add(dup.id); out.push({ id: dup.id, reason: i.reason }); } }
-      else out.push({ meal: { name: i.name, tags: i.tags || [], ...(i.cuisine ? { cuisine: i.cuisine } : {}), ...(i.protein ? { protein: i.protein } : {}), ingredients: i.ingredients.map(g => ({ item: g.item, qty: Math.max(1, g.qty || 1), search: g.search || g.item, ...(g.pantry ? { pantry: true } : {}) })) }, reason: i.reason });
+      else {
+        const f = feedUrls.get(i.recipe_url);
+        // A recipe from a site already in the library (an earlier week) is offered again rather than added twice.
+        const known = f && [...byId.values()].find(m => m.source === f.url);
+        if (known) { if (!seen.has(known.id)) { seen.add(known.id); out.push({ id: known.id, reason: i.reason, from: f.source }); } }
+        else out.push({ ...(f ? { from: f.source } : {}), meal: { name: i.name, ...(f ? { source: f.url } : {}), tags: i.tags || [], ...(i.cuisine ? { cuisine: i.cuisine } : {}), ...(i.protein ? { protein: i.protein } : {}), ingredients: i.ingredients.map(g => ({ item: g.item, qty: Math.max(1, g.qty || 1), search: g.search || g.item, ...(g.pantry ? { pantry: true } : {}) })) }, reason: i.reason });
+      }
     }
     if (p && out.length > before) { perProtein[p] = (perProtein[p] || 0) + 1; out[out.length - 1].protein = p; }
     if (out.length === 10) break;
@@ -129,12 +143,14 @@ export function validate(ideas, byId) {
   return out;
 }
 
-function fakeIdeas(meals) {
+function fakeIdeas(meals, featured = []) {
   const byId = new Map(meals.map(m => [m.id, m]));
   const ideas = meals.slice(0, 8).map(m => ({ existing_id: m.id, name: m.name, reason: `Because you liked ${m.name.split(' ')[0].toLowerCase()} dishes`, tags: [], ingredients: [] }));
   ideas.push({ existing_id: '', name: 'Pretend new dish: lemon chicken orzo', reason: 'Something new, like your traybakes', tags: ['chicken'],
     ingredients: [{ item: 'Orzo', qty: 1, search: 'sainsburys orzo', pantry: false }, { item: 'Chicken thighs', qty: 1, search: 'sainsburys chicken thighs', pantry: false }, { item: 'Olive oil', qty: 1, search: 'olive oil', pantry: true }] });
-  return validate(ideas, byId);
+  for (const f of [...new Map(featured.map(f => [f.source, f])).values()]) ideas.unshift({ existing_id: '', recipe_url: f.url, name: f.title, reason: `New on ${f.source} this week`, protein: 'vegetarian', tags: [],
+    ingredients: [{ item: 'Butternut squash', qty: 1, search: 'sainsburys butternut squash', pantry: false }] });
+  return validate(ideas, byId, featured);
 }
 
 // Shop ingredient lists for meals that have none, e.g. meals from the order

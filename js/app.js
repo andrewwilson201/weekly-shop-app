@@ -196,7 +196,7 @@ function viewWeek() {
   w.offered.forEach(id => {
     const m = mealById(id); if (!m) return;
     const p = picks[id];
-    const tag = m.timesChosen ? `<span class="chip fav">${icon('star')} Picked ${m.timesChosen}×</span>` : m.addedBy?.name === 'Claude' ? `<span class="chip new">${icon('sparkle')} New from Claude</span>` : '<span class="chip">New</span>';
+    const tag = w.from?.[id] && !m.timesChosen ? `<span class="chip new">${icon('link')} New on ${esc(w.from[id])}</span>` : m.timesChosen ? `<span class="chip fav">${icon('star')} Picked ${m.timesChosen}×</span>` : m.addedBy?.name === 'Claude' ? `<span class="chip new">${icon('sparkle')} New from Claude</span>` : '<span class="chip">New</span>';
     html += `<button class="meal${p ? ' on' : ''}" data-act="pick" data-id="${esc(id)}" aria-pressed="${p ? 'true' : 'false'}">
       ${tile(m)}
       <span class="grow"><span class="title">${esc(m.name)}</span>
@@ -598,6 +598,11 @@ function viewSettings() {
       <textarea name="notes" rows="4" data-keep="notes" placeholder="2 adults, children aged 5 and 7. Mild spice for the kids. No mushrooms.">${esc(h.notes || '')}</textarea></label>
       <button class="btn small primary">Save</button></form>
 
+    ${section('Recipe sites')}
+    <div class="card"><p class="small muted">Each week, one of the ideas is a recipe published in the last 7 days on each of these sites. Add a recipe site's address (or its RSS feed).</p>
+      ${sources().map((s, i) => { const st2 = (h.recipeSourceStatus || []).find(x => x.url === s.url); return `<div class="row nowrap" style="margin-bottom:10px;padding:10px 12px;border-radius:12px;background:var(--surface-2)">${icon('link')}<span class="grow small"><b>${esc(s.name || hostOf(s.url))}</b><br><span class="muted">${esc(hostOf(s.url))}${st2 ? ` · ${st2.ok ? '' : 'Last try failed: '}${esc(st2.note)}` : ''}</span></span><button class="btn small ghost danger" data-act="delSource" data-id="${i}">Remove</button></div>`; }).join('')}
+      ${sources().length < 5 ? `<form data-form="addSource" class="row"><input type="text" name="url" required style="flex:2 1 160px" placeholder="bbcgoodfood.com" aria-label="Recipe site address" inputmode="url" autocapitalize="off"><input type="text" name="name" placeholder="Name (optional)" aria-label="Name" style="flex:1 1 120px"><button class="btn primary">Add</button></form>` : ''}</div>
+
     ${section('Holiday mode')}
     <div class="card"><p class="small muted">Add the dates you're away. Sunday ideas pause for any week you're away for most of, and delivery days in that time can't be picked.</p>
       ${(h.away || []).filter(a => a.to >= today()).map(a => `<div class="row nowrap" style="margin-bottom:10px;padding:10px 12px;border-radius:12px;background:var(--surface-2)">${icon('plane')}<span class="grow small"><b>${fmtDay(a.from, { weekday: 'short', day: 'numeric', month: 'short' })} – ${fmtDay(a.to, { weekday: 'short', day: 'numeric', month: 'short' })}</b></span><button class="btn small ghost danger" data-act="delAway" data-id="${esc(a.from)}|${esc(a.to)}">Remove</button></div>`).join('')}
@@ -613,6 +618,19 @@ function viewSettings() {
 actions.notifyOn = () => run(async () => { await S.enableNotifications(); render(); }, 'Notifications are on for this phone');
 actions.notifyOff = () => run(async () => { await S.disableNotifications(); render(); }, 'Notifications are off for this phone');
 actions.saveNotes = f => { const notes = f.notes.value.trim().slice(0, 1000); delete keep.notes; run(() => S.updateH([], { notes }), 'Saved'); };
+// Recipe sites (see worker/feeds.mjs). Never set means the Guardian's recipes.
+const GUARDIAN = { name: 'The Guardian', url: 'https://www.theguardian.com/tone/recipes/rss' };
+const sources = () => Array.isArray(st.household.recipeSources) ? st.household.recipeSources : [GUARDIAN];
+const hostOf = url => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } };
+actions.addSource = f => {
+  let url = f.url.value.trim();
+  if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+  try { url = new URL(url).href; } catch { toast('That doesn\'t look like a web address'); return; }
+  if (sources().some(s => s.url === url)) { toast('That site is already on the list'); return; }
+  const name = f.name.value.trim().slice(0, 40) || hostOf(url);
+  run(() => S.updateH([], { recipeSources: [...sources(), { name, url }] }), 'Added. It\'s used from the next ideas.');
+};
+actions.delSource = el => run(() => S.updateH([], { recipeSources: sources().filter((_, i) => i !== +el.dataset.id) }));
 actions.addAway = f => {
   const from = f.from.value, to = f.to.value;
   if (!from || !to || to < from) { toast('Pick a start date and an end date after it'); return; }
