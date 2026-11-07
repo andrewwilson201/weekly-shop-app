@@ -1,7 +1,7 @@
 // Minimal service worker so every browser treats Weekly Shop as installable.
 // Network first for this site's own files, with the last good copy as an
 // offline fallback. Firebase requests are left alone.
-const CACHE = 'weekly-shop-v5';
+const CACHE = 'weekly-shop-v6';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => {

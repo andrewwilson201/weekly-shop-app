@@ -160,21 +160,33 @@ async function processOrder({ h, ref }) {
       return code;
     });
 
-    // Slots: the chosen day and the day either side.
-    const all = await shop.slots([1, 2, 3]);
+    // Slots: the chosen day and the day either side. If Sainsbury's says the
+    // picked one has gone, the list is refreshed and offered again (3 tries).
     const day = order.deliveryDate;
-    const near = all.filter(s => Math.abs(daysBetween(day, s.start_time.slice(0, 10))) <= 1)
+    const nearSlots = async (skip = new Set()) => (await shop.slots([1, 2, 3]))
+      .filter(s => Math.abs(daysBetween(day, s.start_time.slice(0, 10))) <= 1 && !skip.has(s.start_time))
       .map(s => ({ start_time: s.start_time, end_time: s.end_time, price: s.price, is_green: !!s.is_green, date: londonDate(s.start_time), booking_key: s.booking_key }));
-    await update({ state: 'choose_slot', slots: near.map(({ booking_key, ...s }) => s), slotChoice: FieldValue.delete() });
-    await log(`${near.length} free slots around ${day}`);
-    await notify(h, { title: 'Pick a delivery time', body: `${near.length} free slots around your chosen day.`, link: '#/order', tag: 'order' });
-    const choice = await waitFor(d => d.slotChoice, 30);
-    if (!choice) throw new Error('No delivery time was picked within 30 minutes.');
-    let slot = near.find(s => s.start_time === choice);
-    if (!slot) throw new Error('That slot has gone. Start the order again.');
-    // Keys can go stale: refresh before booking.
-    slot = (await shop.slots([1, 2, 3])).find(s => s.start_time === choice) || slot;
-    const res = await shop.reserve(slot);
+    const gone = new Set();
+    let near = await nearSlots(), res = null, choice = null;
+    for (let attempt = 1; !res; attempt++) {
+      await update({ state: 'choose_slot', slots: near.map(({ booking_key, ...s }) => s), slotChoice: FieldValue.delete(), ...(attempt > 1 ? { message: 'Sainsbury\'s says that slot has just gone. Pick another one.' } : {}) });
+      await log(`${near.length} free slots around ${day}`);
+      if (attempt === 1) await notify(h, { title: 'Pick a delivery time', body: `${near.length} free slots around your chosen day.`, link: '#/order', tag: 'order' });
+      choice = await waitFor(d => d.slotChoice, 30);
+      if (!choice) throw new Error('No delivery time was picked within 30 minutes.');
+      // Keys can go stale: refresh before booking.
+      const slot = (await shop.slots([1, 2, 3])).find(s => s.start_time === choice) || near.find(s => s.start_time === choice);
+      try {
+        if (!slot) { const e = new Error('That slot has gone.'); e.detail = 'no longer available'; throw e; }
+        res = await shop.reserve(slot);
+      } catch (e) {
+        if (!/no longer available|not available|gone/i.test(`${e.detail || ''} ${e.message}`) || attempt >= 3) throw e;
+        await log(`${choice} had gone; offering the others`);
+        gone.add(choice);
+        near = await nearSlots(gone);
+      }
+    }
+    await update({ message: FieldValue.delete() });
     reserved = true;
     await update({ state: 'filling', slot: { start_time: res.slot.start_time, end_time: res.slot.end_time, reserved_until: res.reserved_until } });
     await log(`Booked ${choice}`);
