@@ -16,7 +16,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { FakeSainsburys } from './fake.mjs';
 import { makeJobs } from './jobs.mjs';
 import { notify } from './notify.mjs';
-import { claudeUsual } from './ideas-claude.mjs';
+import { claudeUsual, claudeSwaps } from './ideas-claude.mjs';
 
 // SAINSBURYS_FAKE=1 swaps in a pretend shop, for testing the app end to end.
 // The real one loads Playwright, so it's imported only when needed.
@@ -26,7 +26,7 @@ async function makeShop(opts) {
   const { Sainsburys: Real } = await import('./sainsburys.mjs');
   return new Real(opts);
 }
-import { pickIdeas, weekId, iso, daysBetween, awayWeek, SKIPS_TO_SUGGEST, learnStaple, recordBought, usualCandidates } from '../js/plan.js';
+import { pickIdeas, weekId, iso, daysBetween, awayWeek, SKIPS_TO_SUGGEST, learnStaple, recordBought, usualCandidates, searchTerms, cheapestSwap } from '../js/plan.js';
 
 const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
 initializeApp(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: process.env.GCLOUD_PROJECT || 'weekly-shop-177b1' }
@@ -105,7 +105,7 @@ async function processOrder({ h, ref }) {
     while (Date.now() < until) {
       const d = await read();
       if (d.cancelRequested) throw new Cancelled();
-      const v = pick(d);
+      const v = await pick(d);
       if (v) return v;
       await sleep(3000);
     }
@@ -168,6 +168,8 @@ async function processOrder({ h, ref }) {
     if (before?.items?.length) await log(`The basket already had ${before.items.length} items; they're kept`);
     const lines = (await read()).lines || [];
     await pickUsual(h, lines, log);
+    await pickCheaper(h, lines, shop, log);
+    await update({ lines });
     for (const line of lines) {
       try {
         let uid = line.uid;
@@ -179,6 +181,13 @@ async function processOrder({ h, ref }) {
         try {
           await shop.add(uid, line.qty || 1, slotDate);
         } catch (e) {
+          // A cheaper swap that won't go in: go back to the product it replaced.
+          if (line.swap && e.status === 400) {
+            Object.assign(line, { uid: line.swap.fromUid, product: line.swap.from }); delete line.swap;
+            await shop.add(line.uid, line.qty || 1, slotDate);
+            line.result = 'added';
+            continue;
+          }
           // A usual product from a past order may have been discontinued: fall back to a search.
           if (!((line.source === 'list' || line.usual) && e.status === 400 && line.search)) throw e;
           const hits = (await shop.search(line.search)).filter(p => p.available && String(p.uid) !== String(uid));
@@ -192,10 +201,12 @@ async function processOrder({ h, ref }) {
         line.result = e.status === 400 ? 'unavailable' : `error ${e.status || e.message}`;
       }
     }
-    const b = await shop.basket(slotDate);
-    const items = (b.items || []).map(i => ({ uid: i.product?.sku, name: i.product?.name, qty: i.quantity, total: Number(i.subtotal_price), offer: (i.promotions || [])[0]?.strap_line || '' }));
-    const basket = { items, subtotal: Number(b.subtotal_price), savings: Number(b.savings || 0), delivery: Number(b.slot_price ?? (b.total_price - b.subtotal_price)), minimum: b.minimum_spend };
-    const total = Number(b.total_price);
+    const readBasket = async () => {
+      const b = await shop.basket(slotDate);
+      const items = (b.items || []).map(i => ({ uid: i.product?.sku, name: i.product?.name, qty: i.quantity, total: Number(i.subtotal_price), offer: (i.promotions || [])[0]?.strap_line || '' }));
+      return { b, basket: { items, subtotal: Number(b.subtotal_price), savings: Number(b.savings || 0), delivery: Number(b.slot_price ?? (b.total_price - b.subtotal_price)), minimum: b.minimum_spend }, total: Number(b.total_price) };
+    };
+    let { b, basket, total } = await readBasket();
     const added = lines.filter(l => l.result === 'added').length;
     await log(`Added ${added} of ${lines.length} lines, total £${total.toFixed(2)}`);
     if (b.has_exceeded_minimum_spend === false) {
@@ -208,7 +219,34 @@ async function processOrder({ h, ref }) {
 
     // Approval (the slot is held for about 2 hours)
     const holdMins = Math.max(5, (new Date(res.reserved_until) - Date.now()) / 60000 - 5);
-    const ok = await waitFor(d => d.approvedBy, Math.min(holdMins, 100));
+    // "Switch back" on the review screen: take the offer swap out and put
+    // the product it replaced back in, then show the new total.
+    const undoSwaps = async d => {
+      const todo = lines.filter(l => l.swap && (d.undoSwaps || []).includes(l.key));
+      if (!todo.length) return false;
+      for (const l of todo) {
+        try {
+          await shop.remove(l.uid, l.qty || 1, slotDate);
+          await shop.add(l.swap.fromUid, l.qty || 1, slotDate);
+          l.undone = { product: l.product, offer: l.swap.offer, saving: l.swap.saving };
+          Object.assign(l, { uid: l.swap.fromUid, product: l.swap.from }); delete l.swap;
+          await log(`Switched back to ${l.product}`);
+        } catch (e) {
+          l.swap.error = 'Couldn\'t switch it back. Change it in the Sainsbury\'s app.';
+          l.swap.failed = true;
+        }
+      }
+      ({ basket, total } = await readBasket());
+      await update({ lines, basket, total });
+      return true;
+    };
+    const ok = await waitFor(async d => {
+      if (await undoSwaps({ undoSwaps: (d.undoSwaps || []).filter(k => !lines.find(l => l.key === k)?.swap?.failed) })) {
+        // An approval of the old total doesn't count for the new one.
+        if (d.approvedBy && Math.abs((d.approvedTotal || 0) - total) > 0.005) { await update({ approvedBy: FieldValue.delete(), approvedTotal: FieldValue.delete() }); return null; }
+      }
+      return d.approvedBy;
+    }, Math.min(holdMins, 100));
     if (!ok) {
       await update({ state: 'needs_you', message: 'Nobody approved the order in time. The basket and slot are still in your Sainsbury\'s account: check out in the Sainsbury\'s app, or start again here.' });
       reserved = false;
@@ -276,6 +314,49 @@ async function pickUsual(h, lines, log) {
   if (n) await log(`Picked your usual product for ${n} meal ingredient${n === 1 ? '' : 's'}`);
 }
 
+// Cheaper swaps: for each line, look at what else Sainsbury's has, ask Claude
+// which of those are the same thing as the product it would get (keeping
+// organic, free range, cut, brand where it matters and the household notes),
+// and buy the one with the lowest price per kg/litre/each after offers, Nectar
+// prices and multibuys the line qualifies for. Settings › Cheaper swaps turns
+// it off; a staple set to "Always this one" is never swapped.
+async function pickCheaper(h, lines, shop, log) {
+  if (h.data().cheaperSwaps === false) return;
+  const asks = [], found = new Map();
+  await log('Checking prices, offers and Nectar prices');
+  for (const l of lines) {
+    if (l.keep) continue;
+    let hits;
+    try { hits = await shop.search(l.search || searchTerms(l.product || l.name) || l.name, 12); } catch { continue; }
+    let ref = l.uid ? hits.find(p => String(p.uid) === String(l.uid)) : hits.find(p => p.available);
+    if (!ref && l.uid && l.product) {
+      try { ref = (await shop.search(l.product, 5)).find(p => String(p.uid) === String(l.uid)); } catch {}
+    }
+    if (!ref) continue;
+    if (!l.uid) Object.assign(l, { uid: String(ref.uid), product: ref.name });
+    // Only what's cheaper per kg/litre/each and a similar size goes to Claude.
+    const options = hits.filter(p => cheapestSwap(ref, [p], l.qty || 1));
+    found.set(l.key, { ref, options });
+    if (options.length) asks.push({ key: l.key, item: l.name, current: { u: String(ref.uid), n: ref.name }, options: options.map(p => ({ u: String(p.uid), n: p.name })) });
+  }
+  if (!asks.length) return;
+  let same;
+  try { same = await claudeSwaps(asks, h.data().notes || ''); } catch (e) { await log(`Couldn't check for cheaper swaps: ${e.message}`); return; }
+  if (!same) return;
+  let n = 0, saved = 0;
+  for (const l of lines) {
+    const f = found.get(l.key), ok = new Set(same[l.key] || []);
+    if (!f || !ok.size) continue;
+    const swap = cheapestSwap(f.ref, f.options.filter(p => ok.has(String(p.uid))), l.qty || 1);
+    if (!swap) continue;
+    const p = swap.product;
+    l.swap = { from: f.ref.name, fromUid: String(f.ref.uid), saving: swap.saving, offer: p.offer || '' };
+    Object.assign(l, { uid: String(p.uid), product: p.name });
+    n++; saved += swap.saving;
+  }
+  if (n) await log(`Cheaper swaps: ${n}, saving about £${saved.toFixed(2)}`);
+}
+
 // Record what was bought: staples' last_bought, meals chosen, list items done.
 async function afterPlaced(h, order, lines, delivery) {
   const b = db.batch();
@@ -285,7 +366,8 @@ async function afterPlaced(h, order, lines, delivery) {
   const bought = new Map();
   for (const l of lines) {
     if (l.result !== 'added') continue;
-    const id = l.source === 'staple' ? l.key.slice(7) : l.uid && staples.has(String(l.uid)) ? String(l.uid) : null;
+    const was = l.swap?.fromUid || l.uid;
+    const id = l.source === 'staple' ? l.key.slice(7) : was && staples.has(String(was)) ? String(was) : null;
     if (id && staples.has(id)) bought.set(id, (bought.get(id) || 0) + (l.qty || 1));
     if (l.source === 'list' && l.listId) b.delete(h.ref.collection('list').doc(l.listId));
   }
@@ -302,7 +384,8 @@ async function afterPlaced(h, order, lines, delivery) {
   for (const l of lines) if (l.source === 'meal' && l.usual && l.result === 'added') {
     const [, id, ...rest] = l.key.split(':'); const item = rest.join(':');
     if (!mealPicks.has(id)) mealPicks.set(id, new Map());
-    mealPicks.get(id).set(item, { uid: l.uid, product: l.product });
+    // A cheaper swap doesn't replace the usual: it's checked again each week.
+    mealPicks.get(id).set(item, l.swap ? { uid: l.swap.fromUid, product: l.swap.from } : { uid: l.uid, product: l.product });
   }
   for (const [id, picks] of mealPicks) {
     const ref = h.ref.collection('meals').doc(id);
@@ -314,7 +397,7 @@ async function afterPlaced(h, order, lines, delivery) {
   // Everything bought joins the products list, so typed list items find "your usual".
   const pref = h.ref.collection('meta').doc('products');
   let products = (await pref.get()).data()?.items || [];
-  for (const l of lines) if (l.result === 'added' && l.uid) products = recordBought(products, l.uid, l.product || l.name, delivery);
+  for (const l of lines) if (l.result === 'added' && l.uid) products = l.swap ? recordBought(products, l.swap.fromUid, l.swap.from, delivery) : recordBought(products, l.uid, l.product || l.name, delivery);
   b.set(pref, { items: products }, { merge: true });
   await b.commit();
 }

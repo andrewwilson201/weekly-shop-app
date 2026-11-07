@@ -83,9 +83,20 @@ export class Sainsburys {
   }
 
   // Product search works without logging in too.
+  // Prices are after any offer, Nectar prices included (Sainsbury's shows those
+  // logged out too); was = the unit price before the offer. Multibuys
+  // ("Buy 2 for £4.00 with Nectar") aren't in the price: see js/plan.js.
   async search(term, size = 5) {
     const d = await this.api('GET', '/product/v1/product', { params: { 'filter[keyword]': term, page_size: size, store_identifier: this.store } });
-    return (d?.products || []).map(p => ({ uid: p.product_uid, name: p.name, price: p.retail_price?.price, available: p.is_available !== false, offer: p.promotions?.[0]?.strap_line || '' }));
+    return (d?.products || []).map(p => {
+      const cw = p.catchweight?.[0];
+      const unit = p.unit_price || cw?.unit_price || {};
+      return {
+        uid: p.product_uid, name: p.name, price: p.retail_price?.price ?? cw?.retail_price?.price, available: p.is_available !== false,
+        offer: p.promotions?.[0]?.strap_line || '', unit: unit.price, measure: unit.measure, per: unit.measure_amount || 1,
+        was: p.original_unit_price?.price, catchweight: p.product_type === 'CATCHWEIGHT',
+      };
+    });
   }
 
   async slots(weeks = [1, 2]) {
@@ -116,6 +127,17 @@ export class Sainsburys {
     return this.api('POST', '/basket/v2/basket/item', {
       params: { pick_time: `${slotDate}T00:00:00Z`, store_number: this.store, slot_booked: 'true' },
       body: { product_uid: String(uid), quantity, uom: 'ea', selected_catchweight: '' },
+    });
+  }
+
+  // Take `quantity` of a product back out of the basket (all of it if that's all there is).
+  async remove(uid, quantity, slotDate) {
+    const item = ((await this.basket())?.items || []).find(i => String(i.product?.sku ?? i.product_uid) === String(uid));
+    if (!item) return;
+    const left = Math.max(0, item.quantity - quantity);
+    await this.api('PUT', '/basket/v2/basket', {
+      params: { pick_time: `${slotDate}T00:00:00Z`, store_number: this.store, slot_booked: 'true' },
+      body: { items: [{ product_uid: String(uid), quantity: left, uom: 'ea', selected_catchweight: '', item_uid: item.item_uid, decreasing_quantity: true }] },
     });
   }
 

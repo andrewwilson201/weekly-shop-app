@@ -11,7 +11,11 @@ export class FakeSainsburys {
   }
   async search(term) {
     if (/nothing/i.test(term)) return [];
-    return [{ uid: `p-${term.toLowerCase().replace(/\W+/g, '-')}`.slice(0, 40), name: `Sainsbury's ${term}`, price: 1.5, available: true }];
+    const slug = term.toLowerCase().replace(/\W+/g, '-');
+    const out = [{ uid: `p-${slug}`.slice(0, 40), name: `Sainsbury's ${term}`, price: 1.5, unit: 3.75, measure: 'kg', per: 1, offer: '', available: true }];
+    // Beans have a cheaper equivalent on offer, to test cheaper swaps.
+    if (/beans/i.test(term)) out.push({ uid: `p-cheaper-${slug}`.slice(0, 40), name: `Cheaper ${term}`, price: 1, unit: 2.5, was: 5, measure: 'kg', per: 1, offer: 'Half Price with Nectar', available: true });
+    return out;
   }
   async slots() {
     const out = [];
@@ -32,6 +36,13 @@ export class FakeSainsburys {
     if (/unavailable/.test(uid)) { const e = new Error('400'); e.status = 400; throw e; }
     const price = 2.5;
     this.items.push({ quantity, subtotal_price: price * quantity, product: { sku: uid, name: uid.replace(/^p-/, '').replace(/-/g, ' ') }, promotions: [] });
+  }
+  async remove(uid, quantity) {
+    const i = this.items.findIndex(x => x.product.sku === uid);
+    if (i < 0) return;
+    const it = this.items[i];
+    it.quantity -= quantity; it.subtotal_price = 2.5 * it.quantity;
+    if (it.quantity <= 0) this.items.splice(i, 1);
   }
   async orders() { return []; }
   async placeOrder(expected) { return { orderNumber: '1000000001', card: 'Test card ending 0000', total: expected }; }

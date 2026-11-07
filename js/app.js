@@ -422,17 +422,37 @@ function viewOrder() {
     const b = o.basket || {};
     const missing = (o.lines || []).filter(l => l.result && l.result !== 'added');
     if (missing.length) html += `<div class="notice warn">${icon('alert')}<span class="grow"><b>${missing.length} not added</b><ul class="list compact" style="margin:6px -16px -10px">${missing.map(l => `<li><span class="grow"><span class="name">${esc(l.name)}</span><span class="meta" style="color:inherit;opacity:.8">${esc(l.result === 'not_found' ? 'Not found' : l.result === 'unavailable' ? 'Unavailable' : l.result)}</span></span></li>`).join('')}</ul></span></div>`;
+    // Offer swaps: what came in because it's on offer, what it replaced, the saving, and one tap to switch back.
+    const swaps = (o.lines || []).filter(l => l.swap && l.result === 'added');
+    const undone = (o.lines || []).filter(l => l.undone);
+    const asked = new Set(o.undoSwaps || []);
+    const canUndo = o.state === 'review';
+    if (swaps.length || undone.length) {
+      const saved = swaps.reduce((t, l) => t + (l.swap.saving || 0), 0);
+      html += section('Swapped for offers', { count: swaps.length, right: saved ? `<span class="price" style="color:var(--ok)">−${money(saved)}</span>` : '' });
+      html += `<div class="card flush"><ul class="list">` + swaps.map(l => {
+        const waiting = asked.has(l.key) && !l.swap.failed;
+        return `<li><span class="grow"><span class="name">${esc(l.product)}${(l.qty || 1) > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span>
+          <span class="meta">Swapped in because it's on offer${l.swap.offer ? `: <b style="color:var(--warm)">${esc(l.swap.offer)}</b>` : ''}</span>
+          <span class="meta">You'd have got: ${esc(l.swap.from)}</span>
+          <span class="meta" style="color:var(--ok)">Saves about ${money(l.swap.saving)}</span>
+          ${l.swap.error ? `<span class="meta" style="color:var(--danger)">${esc(l.swap.error)}</span>` : ''}</span>
+          ${canUndo && !l.swap.failed ? `<button class="btn small outline" data-act="undoSwap" data-id="${esc(l.key)}" ${waiting ? 'disabled' : ''}>${waiting ? 'Switching…' : 'Switch back'}</button>` : ''}</li>`;
+      }).join('') + undone.map(l => `<li><span class="grow"><span class="name">${esc(l.product)}${(l.qty || 1) > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span><span class="meta">Switched back from ${esc(l.undone.product)} (the offer would have saved ${money(l.undone.saving)})</span></span><span class="pill">Your usual</span></li>`).join('') +
+        `</ul><p class="tiny muted" style="margin:0;padding:0 16px 12px">Each one is the same kind of product as the one you'd have got, cheaper per kg, litre or item this week because of the offer. The saving is against what you'd have paid for the original.</p></div>`;
+    }
     html += section('Basket', { count: (b.items || []).length });
-    html += `<div class="card flush"><ul class="list compact">` + (b.items || []).map(i => `<li><span class="grow"><span class="name">${esc(i.name)}${i.qty > 1 ? `<span class="qty">×${i.qty}</span>` : ''}</span>${i.offer ? `<span class="meta" style="color:var(--warm)">${esc(i.offer)}</span>` : ''}</span><span class="price">${money(i.total)}</span></li>`).join('') + `</ul>
+    html += `<div class="card flush"><ul class="list compact">` + (b.items || []).map(i => `<li><span class="grow"><span class="name">${esc(i.name)}${i.qty > 1 ? `<span class="qty">×${i.qty}</span>` : ''}</span>${i.offer ? `<span class="meta" style="color:var(--warm)">${esc(i.offer)}</span>` : ''}${swaps.some(l => String(l.uid) === String(i.uid)) ? `<span class="meta">Swapped in for an offer (see above)</span>` : ''}</span><span class="price">${money(i.total)}</span></li>`).join('') + `</ul>
       <div class="totals"><div class="row"><span>Items</span><span class="spacer"></span><span class="price">${money(b.subtotal)}</span></div>
       ${b.savings ? `<div class="row"><span>Savings</span><span class="spacer"></span><span class="price" style="color:var(--ok)">−${money(b.savings)}</span></div>` : ''}
       <div class="row"><span>Delivery</span><span class="spacer"></span><span class="price">${money(b.delivery)}</span></div>
       <div class="total"><span>Total</span><span class="price">${money(o.total)}</span></div>
       ${o.card ? `<p class="small muted" style="margin:8px 0 0">Paid with ${esc(o.card)} on delivery day. Substitutions off.</p>` : ''}</div></div>`;
     if (o.state === 'review') {
+      const switching = swaps.some(l => asked.has(l.key) && !l.swap.failed);
       html += `<div class="actionbar col"><div><p class="small muted" style="margin:0 0 10px">Approving places the order with Sainsbury's. You can still change it in the Sainsbury's app until the cut-off.</p>
         <div class="row nowrap"><button class="btn outline danger" data-act="cancelOrder">Cancel</button>
-        <button class="btn primary lg" style="flex:1" data-act="approve" ${o.approvedBy ? 'disabled' : ''}>${o.approvedBy ? 'Placing…' : `Approve ${money(o.total)}`}</button></div></div></div>`;
+        <button class="btn primary lg" style="flex:1" data-act="approve" ${o.approvedBy || switching ? 'disabled' : ''}>${o.approvedBy ? 'Placing…' : switching ? 'Updating the total…' : `Approve ${money(o.total)}`}</button></div></div></div>`;
     }
   }
   // Once it's placed, the step-by-step progress is history: tuck it away.
@@ -452,6 +472,7 @@ actions.code = f => {
   run(() => S.updateH(['orders', curOrder().id], { smsCode: code, smsBy: S.me() }));
 };
 actions.slot = el => run(() => S.updateH(['orders', curOrder().id], { slotChoice: el.dataset.id, slotBy: S.me() }));
+actions.undoSwap = el => run(() => S.updateH(['orders', curOrder().id], { undoSwaps: S.arrayUnion(el.dataset.id) }));
 actions.approve = () => {
   const o = curOrder();
   if (!confirm(`Place the order for ${money(o.total)}?`)) return;
@@ -567,12 +588,14 @@ function viewStaples() {
       <span class="meta">${skipRule(s) === 'every_week' ? 'Every week' : s.every_days ? `About every ${s.every_days} days` : ''}${s.last_bought ? ` · last ${fmtDay(s.last_bought)}` : ''}${s.skips ? ` · left out ${s.skips}× running` : ''}</span>
       ${s.learned && s.skips >= 3 ? `<span class="meta" style="color:var(--warm)">${esc(s.learned)} · <button class="link" data-act="resetSkips" data-id="${s.id}">Undo</button></span>` : ''}
       ${s.freqNote ? `<span class="meta" style="color:var(--ok)">${esc(s.freqNote)}</span>` : ''}
+      ${st.household.cheaperSwaps === false ? '' : `<span class="meta">${s.keep ? 'Always this one, never swapped · ' : ''}<button class="link" data-act="keepStaple" data-id="${s.id}">${s.keep ? 'Allow cheaper swaps' : 'Always this one'}</button></span>`}
       ${s.times_bought ? `<details class="mini" data-toggle="hist-${s.id}"><summary>Bought ${s.times_bought}×${(s.history || []).length ? ', see when' : ''}</summary>${(s.history || []).length ? `<span class="meta">${[...s.history].reverse().map(x => `${fmtDay(x.date)}${x.qty > 1 ? ` ×${x.qty}` : ''}`).join(' · ')}</span>` : '<span class="meta">Dates are logged from your first order in the app.</span>'}</details>` : ''}</span>
       <input type="checkbox" class="switch" data-change="dropStaple" data-id="${s.id}" ${s.dropped ? '' : 'checked'} aria-label="${s.dropped ? 'Turn on' : 'Turn off'} ${esc(s.name)}"></li>`).join('') + `</ul></div></div>`;
   }
   return html + `</div>`;
 }
 actions.resetSkips = el => run(() => S.updateH(['staples', el.dataset.id], { skips: 0, learned: S.deleteField(), skipped_on: S.deleteField() }));
+actions.keepStaple = el => run(() => { const s = st.staples.find(x => x.id === el.dataset.id); return S.updateH(['staples', s.id], { keep: !s.keep }); }, 'Saved');
 actions.dropStaple = el => run(() => { const s = st.staples.find(x => x.id === el.dataset.id); return S.updateH(['staples', s.id], { dropped: !s.dropped }); });
 
 // ---------- Settings ----------
@@ -596,8 +619,12 @@ function viewSettings() {
       ${iphoneNotInstalled ? `<div class="notice info" style="margin:12px 0 0">${icon('info')}<span class="grow">On iPhone, add Weekly Shop to your home screen first (Share › Add to Home Screen) and turn this on from there.</span></div>` : ''}
       <div style="margin-top:12px">${S.notificationsOn() ? `<div class="row"><span class="chip ok">${icon('check')} On for this phone</span><span class="spacer"></span><button class="btn small outline" data-act="notifyOff">Turn off</button></div>` : `<button class="btn tonal block" data-act="notifyOn">${icon('bell')} Turn on notifications</button>`}</div></div>
 
+    ${section('Prices')}
+    <div class="card"><div class="row nowrap" style="gap:12px;align-items:flex-start"><span class="grow"><b>Cheaper swaps</b><p class="small muted" style="margin:2px 0 0">When the basket is filled, swap to a product that's on offer if it's the cheapest of products that are the same thing (same quality, organic or free range kept, brand kept where it matters), going by price per kg, litre or item with offers, Nectar prices and multibuys counted. The swaps are listed before you approve. Your notes below are followed, for example “always Heinz beans”.</p></span>
+      <input type="checkbox" class="switch" data-change="cheaperSwaps" ${h.cheaperSwaps === false ? '' : 'checked'} aria-label="Cheaper swaps"></div></div>
+
     ${section('Claude')}
-    <form class="card" data-form="saveNotes"><label class="field" style="margin-bottom:10px">About your household<span class="hint">Claude reads this when it picks the week's ideas: who's eating, dislikes, allergies, how adventurous to be.</span>
+    <form class="card" data-form="saveNotes"><label class="field" style="margin-bottom:10px">About your household<span class="hint">Claude reads this when it picks the week's ideas and checks for cheaper swaps: who's eating, dislikes, allergies, how adventurous to be, brands you always buy.</span>
       <textarea name="notes" rows="4" data-keep="notes" placeholder="2 adults, children aged 5 and 7. Mild spice for the kids. No mushrooms.">${esc(h.notes || '')}</textarea></label>
       <button class="btn small primary">Save</button></form>
 
@@ -620,6 +647,7 @@ function viewSettings() {
 }
 actions.notifyOn = () => run(async () => { await S.enableNotifications(); render(); }, 'Notifications are on for this phone');
 actions.notifyOff = () => run(async () => { await S.disableNotifications(); render(); }, 'Notifications are off for this phone');
+actions.cheaperSwaps = el => run(() => S.updateH([], { cheaperSwaps: el.checked }), el.checked ? 'Cheaper swaps on' : 'Cheaper swaps off');
 actions.saveNotes = f => { const notes = f.notes.value.trim().slice(0, 1000); delete keep.notes; run(() => S.updateH([], { notes }), 'Saved'); };
 // Recipe sites (see worker/feeds.mjs). Never set means the Guardian's recipes.
 const GUARDIAN = { name: 'The Guardian', url: 'https://www.theguardian.com/tone/recipes/rss' };
