@@ -175,7 +175,7 @@ function viewWeek() {
   const w = week();
   const order = activeOrder();
   const wo = weekOrder();
-  let html = head('This week', { eyebrow: `Week of ${fmtDay(thisWeekId(), { day: 'numeric', month: 'long' })}`, sub: wo ? '' : `Pick ${TARGET} dinners and a delivery day. The shop is worked out from them.` }) + flow('week');
+  let html = head('This week', { eyebrow: `Week of ${fmtDay(thisWeekId(), { day: 'numeric', month: 'long' })}`, sub: wo ? '' : `Choose a delivery day and pick ${TARGET} dinners. The shop is worked out from them.` }) + flow('week');
   // A running or placed order is shown once, in the bar at the bottom.
 
   const away = st.household.away || [];
@@ -192,7 +192,16 @@ function viewWeek() {
   const picks = w.picks || {};
   const n = Object.keys(picks).length;
   // How many are picked is shown once, in the bar at the bottom.
-  html += section('1. Pick your dinners', { right: `<span class="small muted">${w.ideasBy === 'claude' ? 'Ideas by Claude' : 'From your meals'}</span>` });
+  // Delivery day comes first: it's one tap, and it sets which staples are due and which slots are offered.
+  html += section('1. Choose a delivery day');
+  html += `<div class="days">`;
+  for (let i = 1; i <= 7; i++) {
+    const d = addDays(today(), i);
+    const off = awayOn(away, d);
+    html += `<button data-act="day" data-id="${d}" class="${w.deliveryDate === d ? 'on' : ''}" ${off ? 'disabled title="Away"' : ''} aria-pressed="${w.deliveryDate === d}"><small>${fmtDay(d, { weekday: 'short' })}</small><b>${fmtDay(d, { day: 'numeric' })}</b><span>${off ? 'Away' : fmtDay(d, { month: 'short' })}</span></button>`;
+  }
+  html += `</div>`;
+  html += section('2. Pick your dinners', { right: `<span class="small muted">${w.ideasBy === 'claude' ? 'Ideas by Claude' : 'From your meals'}</span>` });
   w.offered.forEach(id => {
     const m = mealById(id); if (!m) return;
     const p = picks[id];
@@ -209,14 +218,6 @@ function viewWeek() {
     <button class="btn small outline" data-act="remakeIdeas">${icon('shuffle')} Swap the unpicked ones</button>
     <button class="btn small outline" data-act="addIdea">${icon('plus')} Add another meal</button></div>`;
 
-  html += section('2. Choose a delivery day');
-  html += `<div class="days">`;
-  for (let i = 1; i <= 7; i++) {
-    const d = addDays(today(), i);
-    const off = awayOn(away, d);
-    html += `<button data-act="day" data-id="${d}" class="${w.deliveryDate === d ? 'on' : ''}" ${off ? 'disabled title="Away"' : ''} aria-pressed="${w.deliveryDate === d}"><small>${fmtDay(d, { weekday: 'short' })}</small><b>${fmtDay(d, { day: 'numeric' })}</b><span>${off ? 'Away' : fmtDay(d, { month: 'short' })}</span></button>`;
-  }
-  html += `</div>`;
   html += wo
     ? `<div class="actionbar"><div><span class="sum"><b>${wo.state === 'placed' ? 'Ordered' : activeOrder() && ['need_code', 'choose_slot', 'review', 'needs_you'].includes(wo.state) ? 'The order needs you' : 'Order in progress'}</b><span>${esc(orderLine(wo))}</span></span><a class="btn primary" href="#/order">View order ${icon('chevron')}</a></div></div>`
     : `<div class="actionbar"><div><span class="sum"><b>${n} of ${TARGET} dinners</b><span>${w.deliveryDate ? `Delivery ${fmtDay(w.deliveryDate)}` : 'Choose a delivery day'}</span></span>
