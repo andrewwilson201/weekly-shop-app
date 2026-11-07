@@ -130,6 +130,17 @@ export class Sainsburys {
     });
   }
 
+  // Take `quantity` of a product back out of the basket (all of it if that's all there is).
+  async remove(uid, quantity, slotDate) {
+    const item = ((await this.basket())?.items || []).find(i => String(i.product?.sku ?? i.product_uid) === String(uid));
+    if (!item) return;
+    const left = Math.max(0, item.quantity - quantity);
+    await this.api('PUT', '/basket/v2/basket', {
+      params: { pick_time: `${slotDate}T00:00:00Z`, store_number: this.store, slot_booked: 'true' },
+      body: { items: [{ product_uid: String(uid), quantity: left, uom: 'ea', selected_catchweight: '', item_uid: item.item_uid, decreasing_quantity: true }] },
+    });
+  }
+
   async orders() {
     const d = await this.api('GET', '/order/v1/order', { params: { page_size: 10, page_number: 1 } });
     return d?.orders || [];

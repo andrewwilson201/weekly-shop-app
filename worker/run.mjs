@@ -105,7 +105,7 @@ async function processOrder({ h, ref }) {
     while (Date.now() < until) {
       const d = await read();
       if (d.cancelRequested) throw new Cancelled();
-      const v = pick(d);
+      const v = await pick(d);
       if (v) return v;
       await sleep(3000);
     }
@@ -201,10 +201,12 @@ async function processOrder({ h, ref }) {
         line.result = e.status === 400 ? 'unavailable' : `error ${e.status || e.message}`;
       }
     }
-    const b = await shop.basket(slotDate);
-    const items = (b.items || []).map(i => ({ uid: i.product?.sku, name: i.product?.name, qty: i.quantity, total: Number(i.subtotal_price), offer: (i.promotions || [])[0]?.strap_line || '' }));
-    const basket = { items, subtotal: Number(b.subtotal_price), savings: Number(b.savings || 0), delivery: Number(b.slot_price ?? (b.total_price - b.subtotal_price)), minimum: b.minimum_spend };
-    const total = Number(b.total_price);
+    const readBasket = async () => {
+      const b = await shop.basket(slotDate);
+      const items = (b.items || []).map(i => ({ uid: i.product?.sku, name: i.product?.name, qty: i.quantity, total: Number(i.subtotal_price), offer: (i.promotions || [])[0]?.strap_line || '' }));
+      return { b, basket: { items, subtotal: Number(b.subtotal_price), savings: Number(b.savings || 0), delivery: Number(b.slot_price ?? (b.total_price - b.subtotal_price)), minimum: b.minimum_spend }, total: Number(b.total_price) };
+    };
+    let { b, basket, total } = await readBasket();
     const added = lines.filter(l => l.result === 'added').length;
     await log(`Added ${added} of ${lines.length} lines, total £${total.toFixed(2)}`);
     if (b.has_exceeded_minimum_spend === false) {
@@ -217,7 +219,34 @@ async function processOrder({ h, ref }) {
 
     // Approval (the slot is held for about 2 hours)
     const holdMins = Math.max(5, (new Date(res.reserved_until) - Date.now()) / 60000 - 5);
-    const ok = await waitFor(d => d.approvedBy, Math.min(holdMins, 100));
+    // "Switch back" on the review screen: take the offer swap out and put
+    // the product it replaced back in, then show the new total.
+    const undoSwaps = async d => {
+      const todo = lines.filter(l => l.swap && (d.undoSwaps || []).includes(l.key));
+      if (!todo.length) return false;
+      for (const l of todo) {
+        try {
+          await shop.remove(l.uid, l.qty || 1, slotDate);
+          await shop.add(l.swap.fromUid, l.qty || 1, slotDate);
+          l.undone = { product: l.product, offer: l.swap.offer, saving: l.swap.saving };
+          Object.assign(l, { uid: l.swap.fromUid, product: l.swap.from }); delete l.swap;
+          await log(`Switched back to ${l.product}`);
+        } catch (e) {
+          l.swap.error = 'Couldn\'t switch it back. Change it in the Sainsbury\'s app.';
+          l.swap.failed = true;
+        }
+      }
+      ({ basket, total } = await readBasket());
+      await update({ lines, basket, total });
+      return true;
+    };
+    const ok = await waitFor(async d => {
+      if (await undoSwaps({ undoSwaps: (d.undoSwaps || []).filter(k => !lines.find(l => l.key === k)?.swap?.failed) })) {
+        // An approval of the old total doesn't count for the new one.
+        if (d.approvedBy && Math.abs((d.approvedTotal || 0) - total) > 0.005) { await update({ approvedBy: FieldValue.delete(), approvedTotal: FieldValue.delete() }); return null; }
+      }
+      return d.approvedBy;
+    }, Math.min(holdMins, 100));
     if (!ok) {
       await update({ state: 'needs_you', message: 'Nobody approved the order in time. The basket and slot are still in your Sainsbury\'s account: check out in the Sainsbury\'s app, or start again here.' });
       reserved = false;

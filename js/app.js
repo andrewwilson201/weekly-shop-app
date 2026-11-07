@@ -421,22 +421,37 @@ function viewOrder() {
     const b = o.basket || {};
     const missing = (o.lines || []).filter(l => l.result && l.result !== 'added');
     if (missing.length) html += `<div class="notice warn">${icon('alert')}<span class="grow"><b>${missing.length} not added</b><ul class="list compact" style="margin:6px -16px -10px">${missing.map(l => `<li><span class="grow"><span class="name">${esc(l.name)}</span><span class="meta" style="color:inherit;opacity:.8">${esc(l.result === 'not_found' ? 'Not found' : l.result === 'unavailable' ? 'Unavailable' : l.result)}</span></span></li>`).join('')}</ul></span></div>`;
+    // Offer swaps: what came in because it's on offer, what it replaced, the saving, and one tap to switch back.
     const swaps = (o.lines || []).filter(l => l.swap && l.result === 'added');
-    if (swaps.length) {
+    const undone = (o.lines || []).filter(l => l.undone);
+    const asked = new Set(o.undoSwaps || []);
+    const canUndo = o.state === 'review';
+    if (swaps.length || undone.length) {
       const saved = swaps.reduce((t, l) => t + (l.swap.saving || 0), 0);
-      html += `<details class="card flush disclosure" data-toggle="swapsOpen" ${keep.swapsOpen ? 'open' : ''}><summary>${icon('tag')} ${plural(swaps.length, 'cheaper swap')}, about ${money(saved)} less</summary><ul class="list compact">${swaps.map(l => `<li><span class="grow"><span class="name">${esc(l.product)}</span><span class="meta">Instead of ${esc(l.swap.from)}${l.swap.offer ? ` · <span style="color:var(--warm)">${esc(l.swap.offer)}</span>` : ''}</span></span><span class="price" style="color:var(--ok)">−${money(l.swap.saving)}</span></li>`).join('')}</ul><p class="tiny muted" style="margin:0;padding:0 16px 12px">Same thing, on offer this week, for less per kg, litre or item. Remove any you don't want in the Sainsbury's app, or set a staple to “Always this one”.</p></details>`;
+      html += section('Swapped for offers', { count: swaps.length, right: saved ? `<span class="price" style="color:var(--ok)">−${money(saved)}</span>` : '' });
+      html += `<div class="card flush"><ul class="list">` + swaps.map(l => {
+        const waiting = asked.has(l.key) && !l.swap.failed;
+        return `<li><span class="grow"><span class="name">${esc(l.product)}${(l.qty || 1) > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span>
+          <span class="meta">Swapped in because it's on offer${l.swap.offer ? `: <b style="color:var(--warm)">${esc(l.swap.offer)}</b>` : ''}</span>
+          <span class="meta">You'd have got: ${esc(l.swap.from)}</span>
+          <span class="meta" style="color:var(--ok)">Saves about ${money(l.swap.saving)}</span>
+          ${l.swap.error ? `<span class="meta" style="color:var(--danger)">${esc(l.swap.error)}</span>` : ''}</span>
+          ${canUndo && !l.swap.failed ? `<button class="btn small outline" data-act="undoSwap" data-id="${esc(l.key)}" ${waiting ? 'disabled' : ''}>${waiting ? 'Switching…' : 'Switch back'}</button>` : ''}</li>`;
+      }).join('') + undone.map(l => `<li><span class="grow"><span class="name">${esc(l.product)}${(l.qty || 1) > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span><span class="meta">Switched back from ${esc(l.undone.product)} (the offer would have saved ${money(l.undone.saving)})</span></span><span class="pill">Your usual</span></li>`).join('') +
+        `</ul><p class="tiny muted" style="margin:0;padding:0 16px 12px">Each one is the same kind of product as the one you'd have got, cheaper per kg, litre or item this week because of the offer. The saving is against what you'd have paid for the original.</p></div>`;
     }
     html += section('Basket', { count: (b.items || []).length });
-    html += `<div class="card flush"><ul class="list compact">` + (b.items || []).map(i => `<li><span class="grow"><span class="name">${esc(i.name)}${i.qty > 1 ? `<span class="qty">×${i.qty}</span>` : ''}</span>${i.offer ? `<span class="meta" style="color:var(--warm)">${esc(i.offer)}</span>` : ''}</span><span class="price">${money(i.total)}</span></li>`).join('') + `</ul>
+    html += `<div class="card flush"><ul class="list compact">` + (b.items || []).map(i => `<li><span class="grow"><span class="name">${esc(i.name)}${i.qty > 1 ? `<span class="qty">×${i.qty}</span>` : ''}</span>${i.offer ? `<span class="meta" style="color:var(--warm)">${esc(i.offer)}</span>` : ''}${swaps.some(l => String(l.uid) === String(i.uid)) ? `<span class="meta">Swapped in for an offer (see above)</span>` : ''}</span><span class="price">${money(i.total)}</span></li>`).join('') + `</ul>
       <div class="totals"><div class="row"><span>Items</span><span class="spacer"></span><span class="price">${money(b.subtotal)}</span></div>
       ${b.savings ? `<div class="row"><span>Savings</span><span class="spacer"></span><span class="price" style="color:var(--ok)">−${money(b.savings)}</span></div>` : ''}
       <div class="row"><span>Delivery</span><span class="spacer"></span><span class="price">${money(b.delivery)}</span></div>
       <div class="total"><span>Total</span><span class="price">${money(o.total)}</span></div>
       ${o.card ? `<p class="small muted" style="margin:8px 0 0">Paid with ${esc(o.card)} on delivery day. Substitutions off.</p>` : ''}</div></div>`;
     if (o.state === 'review') {
+      const switching = swaps.some(l => asked.has(l.key) && !l.swap.failed);
       html += `<div class="actionbar col"><div><p class="small muted" style="margin:0 0 10px">Approving places the order with Sainsbury's. You can still change it in the Sainsbury's app until the cut-off.</p>
         <div class="row nowrap"><button class="btn outline danger" data-act="cancelOrder">Cancel</button>
-        <button class="btn primary lg" style="flex:1" data-act="approve" ${o.approvedBy ? 'disabled' : ''}>${o.approvedBy ? 'Placing…' : `Approve ${money(o.total)}`}</button></div></div></div>`;
+        <button class="btn primary lg" style="flex:1" data-act="approve" ${o.approvedBy || switching ? 'disabled' : ''}>${o.approvedBy ? 'Placing…' : switching ? 'Updating the total…' : `Approve ${money(o.total)}`}</button></div></div></div>`;
     }
   }
   // Once it's placed, the step-by-step progress is history: tuck it away.
@@ -456,6 +471,7 @@ actions.code = f => {
   run(() => S.updateH(['orders', curOrder().id], { smsCode: code, smsBy: S.me() }));
 };
 actions.slot = el => run(() => S.updateH(['orders', curOrder().id], { slotChoice: el.dataset.id, slotBy: S.me() }));
+actions.undoSwap = el => run(() => S.updateH(['orders', curOrder().id], { undoSwaps: S.arrayUnion(el.dataset.id) }));
 actions.approve = () => {
   const o = curOrder();
   if (!confirm(`Place the order for ${money(o.total)}?`)) return;

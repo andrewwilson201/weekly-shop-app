@@ -37,6 +37,13 @@ export class FakeSainsburys {
     const price = 2.5;
     this.items.push({ quantity, subtotal_price: price * quantity, product: { sku: uid, name: uid.replace(/^p-/, '').replace(/-/g, ' ') }, promotions: [] });
   }
+  async remove(uid, quantity) {
+    const i = this.items.findIndex(x => x.product.sku === uid);
+    if (i < 0) return;
+    const it = this.items[i];
+    it.quantity -= quantity; it.subtotal_price = 2.5 * it.quantity;
+    if (it.quantity <= 0) this.items.splice(i, 1);
+  }
   async orders() { return []; }
   async placeOrder(expected) { return { orderNumber: '1000000001', card: 'Test card ending 0000', total: expected }; }
 }
