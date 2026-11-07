@@ -1,5 +1,84 @@
 {
-  "firestore": { "rules": "firestore.rules" },
-  "functions": [{ "source": "functions", "codebase": "default", "runtime": "nodejs22", "predeploy": ["node \"$PROJECT_DIR/tools/copy-shared.mjs\""] }],
-  "emulators": { "auth": { "port": 9099 }, "firestore": { "port": 8081 }, "functions": { "port": 5001 }, "ui": { "enabled": false } }
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "runtime": "nodejs22",
+      "predeploy": [
+        "node \"$PROJECT_DIR/tools/copy-shared.mjs\""
+      ]
+    }
+  ],
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "firestore": {
+      "port": 8081
+    },
+    "functions": {
+      "port": 5001
+    },
+    "ui": {
+      "enabled": false
+    }
+  },
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**",
+      "functions/**",
+      "worker/**",
+      "test/**",
+      "tools/**",
+      "README.md",
+      "package.json",
+      "package-lock.json",
+      "firestore.rules",
+      "*.log"
+    ],
+    "headers": [
+      {
+        "source": "**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=300"
+          }
+        ]
+      },
+      {
+        "source": "/@(index.html|sw.js|manifest.json)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/manifest.json",
+        "headers": [
+          {
+            "key": "Access-Control-Allow-Origin",
+            "value": "https://andrewwilson201.github.io"
+          }
+        ]
+      }
+    ]
+  }
 }

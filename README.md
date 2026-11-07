@@ -36,7 +36,7 @@ Sainsbury's findings (Nov 2026): headless browsers get “Access Denied”, a vi
 
 ## One-time setup
 
-1. **GitHub Pages**: Settings › Pages › Deploy from a branch › `main` / root. The app is then at https://andrewwilson201.github.io/weekly-shop-app/ (add `andrewwilson201.github.io` under Firebase Authentication › Settings › Authorized domains).
+1. **Hosting**: the app is published to Firebase Hosting at https://weekly-shop-177b1.web.app by the `Deploy site` workflow on every push to `main` (it uses the `FIREBASE_SERVICE_ACCOUNT` secret, which needs the *Firebase Hosting Admin* role). GitHub Pages (Settings › Pages › `main` / root) stays on only to forward old links there. The shop used to live on GitHub Pages, but sharing `andrewwilson201.github.io` with the music app confused Chrome's install check on Android.
 2. **Firestore rules**: paste [`firestore.rules`](firestore.rules) into Firebase console › Firestore Database › Rules › Publish. Also turn on Google sign-in under Authentication › Sign-in method.
 3. **Secrets** (Settings › Secrets and variables › Actions):
    - `FIREBASE_SERVICE_ACCOUNT`: the whole JSON from Firebase console › Project settings › Service accounts › Generate new private key.

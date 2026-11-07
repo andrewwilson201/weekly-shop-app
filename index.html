@@ -2,6 +2,16 @@
 <html lang="en-GB">
 <head>
   <meta charset="utf-8">
+  <script>
+    // The shop moved from GitHub Pages to its own address, so Chrome doesn't
+    // mix it up with the music app on the same github.io site. Keep old links
+    // (including invite links) working.
+    // Only once the new address is up, so the old one keeps working until then.
+    if (location.hostname === 'andrewwilson201.github.io') {
+      const NEW = 'https://weekly-shop-177b1.web.app/';
+      fetch(NEW + 'manifest.json', { cache: 'no-store' }).then(r => { if (r.ok) location.replace(NEW + location.search + location.hash); }).catch(() => {});
+    }
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Weekly Shop</title>
   <meta name="description" content="Pick the week's meals together, keep a shared list, and send the shop to Sainsbury's.">
