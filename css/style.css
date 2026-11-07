@@ -244,6 +244,8 @@ input[type=file]::file-selector-button { font: inherit; font-weight: 600; border
 .chip.ok { background: var(--accent-soft); color: var(--accent-soft-text); }
 .chip.new { background: var(--info-soft); color: var(--info); }
 .chip.danger { background: var(--danger-soft); color: var(--danger); }
+.chip.link { background: none; color: var(--info); box-shadow: inset 0 0 0 1px currentColor; cursor: pointer; }
+.chip.link:hover { background: var(--info-soft); }
 .chip.outline { background: none; box-shadow: inset 0 0 0 1px var(--line-strong); }
 .pill { font: 600 12px/1 var(--sans); padding: 5px 9px; border-radius: 99px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
 .pill.ok { background: var(--ok-soft); color: var(--ok-text); }
