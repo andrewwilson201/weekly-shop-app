@@ -66,7 +66,7 @@ assert((await a.$$('.meal.on')).length === 3, 'picks from both people show up li
 await a.click('.days button >> nth=1');
 await sleep(600);
 await a.screenshot({ path: `${SHOTS}/03-week.png`, fullPage: true });
-assert(await a.locator('.tabs a').count() === 3 && await a.isVisible('.flow a.now:has-text("Dinners")'), 'three tabs, and the week shows its steps');
+assert(await a.locator('.tabs a').count() === 4 && await a.isVisible('.flow a.now:has-text("Dinners")'), 'four tabs, and the week shows its steps');
 
 // Shared list
 await b.goto(`${BASE}#/list`);
@@ -112,7 +112,7 @@ await b.goto(`${BASE}#/meals`);
 await b.fill('input[name=url]', 'https://example.com/recipes/easy-chicken-fajitas');
 await b.click('button:has-text("Add recipe")');
 await b.waitForSelector('text=Reading the recipe');
-const env = { ...process.env, FIRESTORE_EMULATOR_HOST: 'localhost:8081', RECIPE_FAKE: '1' };
+const env = { ...process.env, FIRESTORE_EMULATOR_HOST: 'localhost:8081', RECIPE_FAKE: '1', CLAUDE_FAKE: '1' };
 await new Promise(r => spawn(process.execPath, ['worker/run.mjs', 'check'], { env, stdio: 'inherit' }).on('exit', r));
 await b.waitForSelector('text=11 ingredients added', { timeout: 15000 });
 await b.screenshot({ path: `${SHOTS}/05b-import.png`, fullPage: true });
@@ -135,10 +135,12 @@ assert(await a.isVisible('text=New on The Guardian'), "one idea from the Guardia
 assert(await a.isVisible('text=Pretend theguardian.com recipe'), 'the recipe site idea is shown');
 {
   const card = a.locator('.meal', { hasText: 'Pretend theguardian.com recipe' });
-  await a.evaluate(() => { window.opened = []; window.open = u => { window.opened.push(u); }; });
-  await card.locator('[data-act=openRecipe]').click();
-  assert((await a.evaluate(() => window.opened))[0] === 'https://theguardian.com/recipes/squash-curry', 'Open recipe opens the recipe page');
-  assert(!(await card.evaluate(el => el.classList.contains('on'))), 'opening the recipe does not pick the meal');
+  assert(!(await card.evaluate(el => el.classList.contains('on'))), 'the recipe site idea is not picked');
+  await card.locator('[data-act=viewRecipe]').click();
+  await a.waitForSelector('.method');
+  assert(await a.isVisible('a.chip:has-text("theguardian.com")'), 'Recipe shows the method in the app, with a link to the page');
+  await a.goBack(); await a.waitForSelector('.meal');
+  assert(!(await a.locator('.meal', { hasText: 'Pretend theguardian.com recipe' }).evaluate(el => el.classList.contains('on'))), 'opening the recipe does not pick the meal');
 }
 assert(await a.isVisible('text=New from Claude'), 'new dish from Claude added to the ideas');
 assert(await a.isVisible('text=Because you liked'), 'Claude reasons shown');
@@ -213,6 +215,50 @@ assert(await a.isVisible('text=Something that has nothing'), 'unfound list item 
 await a.goto(`${BASE}#/week`); await sleep(800);
 assert(await a.isVisible('text=Ordered'), 'week shows as ordered');
 await a.screenshot({ path: `${SHOTS}/11-week-after.png`, fullPage: true });
+// Recipes: the ordered dinners, with their methods, until they're cooked
+await a.goto(`${BASE}#/cook`);
+await a.waitForSelector('.list li:has-text("Easy chicken fajitas")');
+const toCookCount = await a.locator('.list li:has(button[data-act=cooked])').count();
+assert(toCookCount >= 4, `the ordered dinners are on Recipes (${toCookCount})`);
+// Meals with no method saved get one (from Claude here, pretend)
+await new Promise(r => spawn(process.execPath, ['worker/run.mjs', 'check'], { env: { ...env, CLAUDE_FAKE: '1' }, stdio: 'inherit' }).on('exit', r));
+await a.waitForSelector('text=Method by Claude', { timeout: 15000 });
+await a.screenshot({ path: `${SHOTS}/13-recipes.png`, fullPage: true });
+await a.click('.list a:has-text("Easy chicken fajitas")');
+await a.waitForSelector('text=Toss the chicken with the paprika and oil.');
+assert(await a.isVisible('text=2 chicken breasts, sliced into strips'), 'recipe shows the page\'s ingredients with amounts');
+await a.click('.method button >> nth=0');
+assert(await a.locator('.method button.done').count() === 1, 'a step can be ticked off');
+await a.screenshot({ path: `${SHOTS}/14-recipe.png`, fullPage: true });
+await a.click('button:has-text("Cooked it")');
+await a.waitForSelector('.actionbar button:has-text("Undo")');
+await a.goto(`${BASE}#/cook`);
+await a.waitForSelector('summary:has-text("Done lately")');
+assert(await a.locator('.list li:has(button[data-act=cooked])').count() === toCookCount - 1, 'a cooked dinner leaves the list');
+{
+  const other = (await a.locator('.list li:has(button[data-act=cooked]) .name').first().innerText());
+  await a.click('.list a:has-text("' + other.replace(/"/g, '') + '")');
+  await a.waitForSelector('text=Pretend step one');
+  assert(await a.isVisible('text=Method written by Claude'), 'a meal without a page gets a method from Claude');
+}
+// A week later, after the next shop: last week's uncooked dinners are still there.
+{
+  const ctx = await browser.newContext(phone);
+  await ctx.clock.install({ time: new Date(Date.now() + 7 * 864e5) });
+  const c = await ctx.newPage();
+  c.on('pageerror', e => console.log('PAGE ERROR', e.message));
+  await c.goto(BASE);
+  await signIn(c, 'Andrew Wilson', 'andrew@example.com');
+  await c.goto(`${BASE}#/week`);
+  await c.waitForSelector('text=still to cook from last week', { timeout: 15000 });
+  await c.screenshot({ path: `${SHOTS}/15-next-week.png`, fullPage: true });
+  await c.goto(`${BASE}#/cook`);
+  await c.waitForSelector('h2:has-text("Last week")');
+  assert(await c.locator('.list li:has(button[data-act=cooked])').count() === toCookCount - 1, 'next week, last week\'s uncooked dinners are still on Recipes');
+  await c.screenshot({ path: `${SHOTS}/16-recipes-next-week.png`, fullPage: true });
+  await ctx.close();
+}
+
 await a.goto(`${BASE}#/staples`); await sleep(800);
 assert(await a.isVisible(`li:has-text("${firstStaple.replace(/"/g, '')}") >> text=left out 1× running`), 'unticked staple counted as a skip');
 assert(await a.isVisible('summary:has-text("see when")'), 'bought staples log the purchase date');

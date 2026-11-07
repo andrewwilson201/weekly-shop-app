@@ -32,7 +32,7 @@ const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
 initializeApp(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: process.env.GCLOUD_PROJECT || 'weekly-shop-177b1' }
   : { credential: sa ? cert(JSON.parse(sa)) : applicationDefault() });
 const db = getFirestore();
-const { makeIdeas, processImport, claimImport, claimIdeas, fillIngredients } = makeJobs(db);
+const { makeIdeas, processImport, claimImport, claimIdeas, fillIngredients, fillRecipe } = makeJobs(db);
 
 const DEADLINE = Date.now() + (Number(process.env.WORKER_MINUTES) || 50) * 60000;
 const ACTIVE = ['requested', 'logging_in', 'need_code', 'choose_slot', 'filling', 'review', 'placing'];
@@ -64,6 +64,14 @@ async function requestedIdeas() {
     for (const w of q.docs) {
       if (await claimIdeas(w.ref)) await makeIdeas(h, w.id, 'request', Object.keys(w.data().picks || {}));
     }
+  }
+}
+
+// Recipes asked for on the Recipes screen (the functions usually do these first).
+async function requestedRecipes() {
+  for (const h of await households()) {
+    const q = await h.ref.collection('meals').where('recipeRequested', '==', true).get();
+    for (const m of q.docs) await fillRecipe(h, m.ref);
   }
 }
 
@@ -411,12 +419,14 @@ async function main() {
     // Recipe links and idea requests don't need the browser, so do them straight away.
     for (const i of await waitingImports()) if (await claimImport(i.ref)) await processImport(i);
     await requestedIdeas();
+    await requestedRecipes();
     for (const h of await households()) await fillIngredients(h);
     if (process.env.GITHUB_OUTPUT) (await import('node:fs')).appendFileSync(process.env.GITHUB_OUTPUT, `work=${n ? 'yes' : 'no'}\n`);
     return;
   }
   for (const i of await waitingImports()) if (await claimImport(i.ref)) await processImport(i);
   await requestedIdeas();
+  await requestedRecipes();
   if (!process.env.SAINSBURYS_EMAIL || !process.env.SAINSBURYS_PASSWORD) throw new Error('SAINSBURYS_EMAIL and SAINSBURYS_PASSWORD must be set');
   const waiting = await waitingOrders();
   if (!waiting.length) { console.log('No orders waiting'); return; }

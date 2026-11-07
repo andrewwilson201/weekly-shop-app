@@ -245,3 +245,34 @@ The household's own notes come first: anything they say to always buy, or never 
   const ok = new Map(asks.map(a => [a.key, new Set(a.options.map(o => String(o.u)))]));
   return Object.fromEntries((out.lines || []).filter(l => ok.has(l.key)).map(l => [l.key, (l.same || []).map(String).filter(u => ok.get(l.key).has(u))]));
 }
+
+// A recipe to cook from, for a meal whose page has no method (or that has no
+// page: Claude's own dishes, starter meals, ones typed in by name). Written for
+// the household, using what the shop buys for it. Returns null with no key.
+const RECIPE_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['servings', 'time', 'lines', 'steps'],
+  properties: {
+    servings: { type: 'string', description: 'e.g. "Serves 4 (2 adults, 2 children)"' },
+    time: { type: 'string', description: 'Total time, e.g. "40 min" or "1 hr 15 min"' },
+    lines: { type: 'array', items: { type: 'string' }, description: 'Ingredients with amounts, e.g. "2 x 400g tins chopped tomatoes"' },
+    steps: { type: 'array', items: { type: 'string' }, description: 'Method, one step per item, in order' },
+  },
+};
+export async function claudeRecipe(meal, notes = '') {
+  if (process.env.CLAUDE_FAKE) return { servings: 'Serves 4', time: '30 min', lines: (meal.ingredients || []).map(i => i.item), steps: [`Pretend step one for ${meal.name}.`, 'Pretend step two.'], by: 'claude' };
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const response = await new Anthropic().beta.messages.create({
+    model: MODEL,
+    max_tokens: 8000,
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: RECIPE_SCHEMA } },
+    system: `You write clear home recipes for a UK family's weeknight dinners. Write one recipe for the dinner named, for the whole household, using the shopping list given (store-cupboard basics are fine to add). Use UK names and metric amounts, oven temperatures in °C (fan), and say how to tell when things are done. Keep it to 4 to 10 short steps that are easy to follow on a phone while cooking. Respect any household notes (ages, dislikes, allergies).`,
+    messages: [{ role: 'user', content: `Household notes: ${notes || 'none given'}\n\nDinner: ${meal.name}\nShopping list: ${(meal.ingredients || []).map(i => `${i.item}${i.qty > 1 ? ` x${i.qty}` : ''}`).join(', ') || 'none given'}` }],
+  });
+  if (response.stop_reason === 'refusal' || response.stop_reason === 'max_tokens') throw new Error(`Claude stopped: ${response.stop_reason}`);
+  const r = JSON.parse(response.content.filter(b => b.type === 'text').map(b => b.text).join(''));
+  const clean = a => (a || []).map(x => String(x).trim()).filter(Boolean);
+  if (!clean(r.steps).length) return null;
+  return { servings: String(r.servings || ''), time: String(r.time || ''), lines: clean(r.lines), steps: clean(r.steps), by: 'claude' };
+}

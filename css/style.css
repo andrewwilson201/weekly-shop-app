@@ -128,7 +128,7 @@ main { max-width: 680px; margin: 0 auto; padding: 8px 16px calc(var(--tabbar) + 
 
 /* ---------- tab bar ---------- */
 .tabs {
-  position: fixed; bottom: 0; left: 0; right: 0; z-index: 30; display: grid; grid-template-columns: repeat(3, 1fr);
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 30; display: grid; grid-template-columns: repeat(4, 1fr);
   background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: saturate(1.6) blur(16px); -webkit-backdrop-filter: saturate(1.6) blur(16px);
   border-top: 1px solid var(--line); padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
 }
@@ -432,3 +432,19 @@ details.mini .meta { margin-top: 4px; }
 .pick .name { font-size: 15px; }
 .pick.on .name { font-weight: 600; }
 .pick svg { width: 18px; height: 18px; flex: none; color: var(--ok-text, var(--accent)); }
+
+/* ---------- recipes ---------- */
+button.chip { border: 0; cursor: pointer; font-family: inherit; }
+a.chip:hover { text-decoration: none; }
+.recipe-img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--radius); margin: 0 0 12px; background: var(--surface-2); }
+.recipe-facts { gap: 8px; margin: 0 0 4px; }
+.ingredients { list-style: none; margin: 0; padding: 0; }
+.ingredients li { padding: 7px 0 7px 18px; position: relative; font-size: 15.5px; line-height: 1.4; }
+.ingredients li + li { border-top: 1px solid var(--line); }
+.ingredients li::before { content: ''; position: absolute; left: 2px; top: 15px; width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }
+.method { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.method button { display: flex; gap: 12px; align-items: flex-start; width: 100%; text-align: left; background: none; border: 0; padding: 10px 6px; margin: 0 -6px; border-radius: 12px; color: var(--text); font: 16.5px/1.5 var(--sans); cursor: pointer; }
+.method button:hover { background: var(--surface-2); }
+.method .n { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-soft-text); font: 700 13px/1 var(--sans); margin-top: -1px; }
+.method button.done .t { color: var(--faint); text-decoration: line-through; }
+.method button.done .n { background: var(--ok-soft); color: var(--ok-text); }

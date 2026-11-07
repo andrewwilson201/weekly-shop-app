@@ -4,8 +4,8 @@
 // The functions get a copy of this folder at deploy time (tools/copy-shared.mjs).
 
 import { FieldValue } from 'firebase-admin/firestore';
-import { fetchRecipe } from './recipe.mjs';
-import { claudeIdeas, claudeIngredients } from './ideas-claude.mjs';
+import { fetchRecipe, recipeFrom } from './recipe.mjs';
+import { claudeIdeas, claudeIngredients, claudeRecipe } from './ideas-claude.mjs';
 import { recentRecipes, recipeSources } from './feeds.mjs';
 import { pickIdeas, weekId, iso } from '../js/plan.js';
 
@@ -17,6 +17,14 @@ async function claimImport(ref) {
     const d = await t.get(ref);
     if (d.data()?.state !== 'requested') return false;
     t.update(ref, { state: 'reading' });
+    return true;
+  });
+}
+async function claimRecipe(ref) {
+  return db.runTransaction(async t => {
+    const d = await t.get(ref);
+    if (d.data()?.recipeRequested !== true) return false;
+    t.update(ref, { recipeRequested: 'working' });
     return true;
   });
 }
@@ -104,7 +112,7 @@ const readRecipe = url => process.env.RECIPE_FAKE ? fakeRecipe(url) : fetchRecip
 async function fromPage(url) {
   try {
     const r = await readRecipe(url);
-    return { ingredients: r.ingredients, ...(r.image ? { image: r.image } : {}), ...(r.servings ? { servings: r.servings } : {}) };
+    return { ingredients: r.ingredients, ...(r.image ? { image: r.image } : {}), ...(r.servings ? { servings: r.servings } : {}), ...(r.recipe ? { recipe: r.recipe } : {}) };
   } catch (e) {
     console.log(`Couldn't read a site recipe, keeping Claude's ingredients: ${e.message}`);
     return {};
@@ -122,7 +130,7 @@ async function addSiteRecipes(h, featured, offered, keep, reasons, from) {
       let r;
       try { r = await readRecipe(f.url); } catch (e) { console.log(`Site recipe skipped: ${e.message}`); continue; }
       const doc = h.ref.collection('meals').doc();
-      await doc.set({ name: r.name || f.title, ingredients: r.ingredients, source: f.url, image: r.image || null, servings: r.servings || null, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: { name: site } });
+      await doc.set({ name: r.name || f.title, ingredients: r.ingredients, source: f.url, image: r.image || null, servings: r.servings || null, ...(r.recipe ? { recipe: r.recipe } : {}), timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: { name: site } });
       let at = -1;
       for (let k = offered.length - 1; k >= keep.length; k--) if (!from[offered[k]] && !keep.includes(offered[k])) { at = k; break; }
       if (offered.length >= 10 + keep.length && at >= 0) offered[at] = doc.id; else offered.push(doc.id);
@@ -139,7 +147,7 @@ async function processImport({ h, ref, data }) {
   try {
     const r = await (process.env.RECIPE_FAKE ? fakeRecipe(data.url) : fetchRecipe(data.url));
     const meal = h.ref.collection('meals').doc();
-    await meal.set({ name: r.name || 'Recipe from a link', ingredients: r.ingredients, source: data.url, image: r.image || null, servings: r.servings || null, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: data.by || null });
+    await meal.set({ name: r.name || 'Recipe from a link', ingredients: r.ingredients, source: data.url, image: r.image || null, servings: r.servings || null, ...(r.recipe ? { recipe: r.recipe } : {}), timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: data.by || null });
     if (data.addToWeek) {
       const week = h.ref.collection('weeks').doc(weekId(new Date()));
       const update = { offered: FieldValue.arrayUnion(meal.id), createdAt: FieldValue.serverTimestamp() };
@@ -160,7 +168,31 @@ async function fakeRecipe(url) {
   const { extractRecipe, parseIngredient } = await import('./recipe.mjs');
   const html = (await import('node:fs')).readFileSync(new URL('../test/fixtures/recipe.html', import.meta.url), 'utf8');
   const r = extractRecipe(html, url);
-  return { ...r, ingredients: r.ingredients.map(parseIngredient) };
+  return { ...r, ingredients: r.ingredients.map(parseIngredient), recipe: recipeFrom(r) };
+}
+
+// A meal someone wants to cook (picked, or opened on Recipes) with no method
+// saved: read its recipe page again if it has one (meals added before methods
+// were kept, or ones whose page Claude suggested), otherwise Claude writes one.
+// Asked for by setting recipeRequested on the meal; tried once each time.
+async function fillRecipe(h, ref) {
+  if (!(await claimRecipe(ref))) return;
+  const m = (await ref.get()).data();
+  try {
+    let recipe = null;
+    if (/^https?:\/\//.test(m.source || '')) {
+      try { recipe = (await readRecipe(m.source)).recipe; }
+      catch (e) { console.log(`Couldn't read the recipe page again: ${e.message}`); }
+    }
+    if (!recipe) recipe = await claudeRecipe(m, h.data().notes || '');
+    await ref.update(recipe
+      ? { recipe, recipeRequested: FieldValue.delete(), recipeMessage: FieldValue.delete() }
+      : { recipeRequested: FieldValue.delete(), recipeMessage: 'No method could be found for this one.' });
+    console.log(recipe ? `Saved a recipe (${recipe.by})` : 'No recipe found');
+  } catch (e) {
+    await ref.update({ recipeRequested: FieldValue.delete(), recipeMessage: 'Couldn\'t get the method just now. Try again in a bit.' });
+    console.log(`Recipe failed: ${e.message}`);
+  }
 }
 
 // Meals with no ingredient list (typed in, or from the order history) get one
@@ -186,5 +218,5 @@ async function fillIngredients(h, only = null) {
   }
 }
 
-return { claimImport, claimIdeas, makeIdeas, processImport, fakeRecipe, fillIngredients };
+return { claimImport, claimIdeas, makeIdeas, processImport, fakeRecipe, fillIngredients, fillRecipe };
 }

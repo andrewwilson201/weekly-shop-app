@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { stapleStatus, buildShop, weekId, awayWeek, awayOn, matchUsual, recordBought, parseMultibuy, eachPrice, onOffer, packSize, unitCost, searchTerms, cheapestSwap } from '../js/plan.js';
+import { stapleStatus, buildShop, weekId, awayWeek, awayOn, matchUsual, recordBought, parseMultibuy, eachPrice, onOffer, packSize, unitCost, searchTerms, cheapestSwap, toCook } from '../js/plan.js';
 
 test('staple due rule matches build-staples.py', () => {
   assert.equal(stapleStatus({ rule: 'every_week' }, '2026-11-10'), 'add');
@@ -159,4 +159,27 @@ test('cheapest swap compares price per kg at a similar pack size', () => {
   assert.equal(c, null);                                                // size check rules it out either way
   // Catchweight (priced by weight at the till) is never swapped to or from.
   assert.equal(cheapestSwap({ ...P.mild, catchweight: true }, [P.cathedral], 1), null);
+});
+
+test('toCook keeps last week\'s dinners until they are cooked', () => {
+  const weeks = {
+    '2026-10-25': { id: '2026-10-25', picks: { old: {} } },                       // no order: nothing bought
+    '2026-11-01': { id: '2026-11-01', picks: { a: {}, b: {}, x: {} }, cooked: { a: { on: '2026-11-04' } } },
+    '2026-11-08': { id: '2026-11-08', picks: { c: {} }, deliveryDate: '2026-11-12' },
+    '2026-10-18': { id: '2026-10-18', picks: { z: {} } },
+  };
+  const orders = [
+    { week: '2026-11-01', state: 'placed', meals: ['a', 'b'], deliveryDate: '2026-11-05' }, // x was unpicked before ordering
+    { week: '2026-10-18', state: 'cancelled' },
+  ];
+  const out = toCook({ weeks, orders, current: '2026-11-08' });
+  assert.deepEqual(out.map(x => x.mealId), ['a', 'b', 'c']);
+  assert.equal(out[0].done.on, '2026-11-04');
+  assert.equal(out[1].done, null);
+  assert.equal(out[1].delivery, '2026-11-05');
+  assert.equal(out[1].ordered, true);
+  assert.equal(out[2].ordered, false);
+  // A failed order may have been finished by hand in Sainsbury's app, so its picks still count.
+  const failed = toCook({ weeks: { w: { id: '2026-11-01', picks: { q: {} } } }, orders: [{ week: '2026-11-01', state: 'failed' }], current: '2026-11-08' });
+  assert.deepEqual(failed.map(x => x.mealId), ['q']);
 });

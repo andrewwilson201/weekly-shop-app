@@ -1,5 +1,5 @@
 import * as S from './store.js';
-import { weekId, iso, addDays, buildShop, stapleStatus, pickIdeas, awayOn, awayWeek, skipRule, matchUsual } from './plan.js';
+import { weekId, iso, addDays, buildShop, stapleStatus, pickIdeas, awayOn, awayWeek, skipRule, matchUsual, toCook } from './plan.js';
 import { icon, tile, avatar } from './ui.js';
 
 const $main = document.getElementById('main');
@@ -25,13 +25,13 @@ async function run(fn, done) {
 }
 
 // ---------- routing ----------
-const routes = { week: viewWeek, list: viewList, shop: viewShop, order: viewOrder, meals: viewMeals, meal: viewMeal, staples: viewStaples, settings: viewSettings };
+const routes = { week: viewWeek, cook: viewCook, recipe: viewRecipe, list: viewList, shop: viewShop, order: viewOrder, meals: viewMeals, meal: viewMeal, staples: viewStaples, settings: viewSettings };
 let route = 'week', arg = null;
 function parseHash() {
   const [, r = 'week', a = null] = (location.hash || '#/week').split('/');
   route = routes[r] ? r : 'week'; arg = a && decodeURIComponent(a);
 }
-window.addEventListener('hashchange', () => { parseHash(); keep = {}; render(); window.scrollTo(0, 0); });
+window.addEventListener('hashchange', () => { parseHash(); keep = {}; screenOn(false); render(); window.scrollTo(0, 0); });
 parseHash();
 window.addEventListener('scroll', () => document.getElementById('topbar').classList.toggle('scrolled', window.scrollY > 4), { passive: true });
 
@@ -61,7 +61,7 @@ function render() {
   tabs.hidden = !ready; settings.hidden = !ready;
   document.getElementById('sync').textContent = navigator.onLine ? '' : 'Offline';
   document.getElementById('who').innerHTML = ready ? Object.entries(st.household.memberNames || {}).map(([uid, name]) => avatar({ uid, name })).join('') : '';
-  const tab = { shop: 'week', order: 'week', meal: 'meals', staples: 'meals' }[route] || route;
+  const tab = { shop: 'week', order: 'week', recipe: 'cook', meal: 'meals', staples: 'meals' }[route] || route;
   tabs.querySelectorAll('a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
   const focus = remember();
   if (!st.ready) { $main.innerHTML = '<div class="loading"><span class="spinner"></span></div>'; return; }
@@ -180,6 +180,8 @@ function viewWeek() {
 
   const away = st.household.away || [];
   const nowAway = awayOn(away, today()) || (awayWeek(away, thisWeekId()) && away.find(a => a.to >= today()));
+  const left = stillToCook();
+  if (left.length) html += `<a class="notice info" href="#/cook">${icon('book')}<span class="grow"><b>${plural(left.length, 'dinner')} still to cook from ${left.every(x => x.week === addDays(thisWeekId(), -7)) ? 'last week' : 'earlier weeks'}</b><br>${esc(left.map(x => mealById(x.mealId)?.name).filter(Boolean).join(' · '))}</span>${icon('chevron', 'chev')}</a>`;
   if (nowAway) html += `<div class="notice warn">${icon('plane')}<span class="grow"><b>Holiday mode</b> · away ${fmtDay(nowAway.from)} to ${fmtDay(nowAway.to)}. Sunday ideas are paused for weeks you're away. <a href="#/settings">Change</a></span></div>`;
   if (!st.meals.length) {
     return html + `<div class="card">${empty('bowl', 'No meals yet', 'Load a starter set of family dinners to get going. You can edit them and add your own.', '<button class="btn primary" data-act="loadStarter">Load starter meals</button>')}</div>`;
@@ -210,7 +212,7 @@ function viewWeek() {
       ${tile(m)}
       <span class="grow"><span class="title">${esc(m.name)}</span>
       ${w.reasons?.[id] ? `<span class="why">${esc(w.reasons[id])}</span>` : ''}
-      <span class="chips">${tag}${/^https?:\/\//.test(m.source || '') ? `<span class="chip link" data-act="openRecipe" data-id="${esc(m.source)}" role="link" title="Open the recipe on ${esc(hostOf(m.source))}">${icon('link')} Open recipe</span>` : ''}${m.cuisine ? `<span class="chip outline">${esc(m.cuisine)}</span>` : ''}${p ? `<span class="chip ok">${avatar(p, 'sm')} ${esc(p.name?.split(' ')[0] || '')}</span>` : ''}</span></span>
+      <span class="chips">${tag}<span class="chip link" data-act="viewRecipe" data-id="${esc(id)}" role="link">${icon('book')} Recipe</span>${m.cuisine ? `<span class="chip outline">${esc(m.cuisine)}</span>` : ''}${p ? `<span class="chip ok">${avatar(p, 'sm')} ${esc(p.name?.split(' ')[0] || '')}</span>` : ''}</span></span>
       <span class="tick">${icon('check')}</span></button>`;
   });
   html += `<div class="toolbar">
@@ -224,8 +226,8 @@ function viewWeek() {
     <a class="btn primary" href="#/shop">Next: the shop ${icon('chevron')}</a></div></div>`;
   return html;
 }
-// The "Open recipe" chip sits inside the meal's pick button; the click handler finds the chip first, so it doesn't pick.
-actions.openRecipe = el => { if (/^https?:\/\//.test(el.dataset.id)) window.open(el.dataset.id, '_blank', 'noopener'); };
+// The "Recipe" chip sits inside the meal's pick button; the click handler finds the chip first, so it doesn't pick.
+actions.viewRecipe = el => { location.hash = `#/recipe/${encodeURIComponent(el.dataset.id)}`; };
 actions.loadStarter = () => run(async () => {
   const res = await fetch('data/recipes.json'); const { meals } = await res.json();
   await S.batchH(meals.map(m => ['add', ['meals'], { ...m, timesChosen: 0, createdAt: S.serverTimestamp() }]));
@@ -240,10 +242,131 @@ actions.remakeIdeas = () => run(async () => {
 });
 actions.pick = el => run(() => {
   const id = el.dataset.id; const picks = week().picks || {};
+  // Picked dinners get their method fetched (or written) now, so it's ready to cook from.
+  if (!picks[id]) askRecipe(mealById(id));
   return S.updateH(['weeks', thisWeekId()], { [`picks.${id}`]: picks[id] ? S.deleteField() : S.me() });
 });
 actions.day = el => run(() => S.setH(['weeks', thisWeekId()], { deliveryDate: el.dataset.id }));
 actions.addIdea = () => { location.hash = '#/meals'; };
+
+// ---------- Recipes (what to cook) ----------
+// Dinners shopped for stay here until they're marked cooked, so last week's
+// are still easy to find after the next week's shop is ordered (toCook in plan.js).
+const cookList = () => toCook({ weeks: st.weeks, orders: st.orders, current: thisWeekId() }).filter(x => mealById(x.mealId));
+const stillToCook = () => cookList().filter(x => !x.done && x.week < thisWeekId());
+const hasMethod = m => !!m?.recipe?.steps?.length;
+// Ask the functions (or the worker) for a meal's method: from its page, or written by Claude.
+function askRecipe(m) {
+  if (!m || hasMethod(m) || m.recipeRequested) return;
+  S.updateH(['meals', m.id], { recipeRequested: true, recipeMessage: S.deleteField() }).catch(e => console.error(e));
+}
+const weekName = wid => wid === thisWeekId() ? 'This week' : wid === addDays(thisWeekId(), -7) ? 'Last week' : `Week of ${fmtDay(wid, { day: 'numeric', month: 'short' })}`;
+function deliveryNote(x) {
+  if (!x.ordered) return x.week === thisWeekId() ? 'Not ordered yet' : 'Ordered';
+  if (!x.delivery) return 'Ordered';
+  return x.delivery <= today() ? `Delivered ${fmtDay(x.delivery)}` : `Arriving ${fmtDay(x.delivery)}`;
+}
+function recipeMeta(m) {
+  const bits = [];
+  if (m.recipe?.time) bits.push(m.recipe.time);
+  if (hasMethod(m)) bits.push(m.recipe.by === 'claude' ? 'Method by Claude' : `From ${hostOf(m.source || '') || 'the recipe page'}`);
+  else if (m.recipeRequested) bits.push('Getting the method…');
+  else if (m.source) bits.push(`Recipe on ${hostOf(m.source)}`);
+  return bits.join(' · ');
+}
+function viewCook() {
+  const all = cookList();
+  const todo = all.filter(x => !x.done);
+  let html = head('Recipes', { eyebrow: 'To cook', sub: 'The dinners you\'ve shopped for, with their recipes. Each stays here until you mark it cooked, even after the next shop.' });
+  if (!todo.length) {
+    html += `<div class="card">${empty('book', all.length ? 'All cooked' : 'Nothing to cook yet', all.length ? 'Everything you shopped for is done. Next week\'s dinners appear here once you pick them.' : 'Pick this week\'s dinners and they\'ll show here with their recipes.', '<a class="btn primary" href="#/week">This week</a>')}</div>`;
+  }
+  const weeks = [...new Set(todo.map(x => x.week))];
+  for (const wid of weeks) {
+    const rows = todo.filter(x => x.week === wid);
+    const past = wid < thisWeekId();
+    html += section(weekName(wid), { count: rows.length, right: `<span class="small muted">${esc(deliveryNote(rows[0]))}</span>` });
+    html += `<div class="card flush"><ul class="list">` + rows.map(x => {
+      const m = mealById(x.mealId);
+      return `<li class="link-row">${tile(m, 'sm')}<a href="#/recipe/${esc(m.id)}" class="grow"><span class="name">${esc(m.name)}</span><span class="meta">${esc(recipeMeta(m))}</span></a>
+        <button class="btn small outline" data-act="cooked" data-id="${esc(wid)}|${esc(m.id)}" aria-label="Mark ${esc(m.name)} cooked">${icon('check')} Cooked</button></li>`;
+    }).join('') + `</ul></div>`;
+    if (past && rows.length > 1) html += `<p class="small muted" style="margin:-4px 4px 0;text-align:right"><button class="link" data-act="notCookingWeek" data-id="${esc(wid)}">Not making the rest</button></p>`;
+  }
+  const done = all.filter(x => x.done).sort((a, b) => String(b.done.on).localeCompare(String(a.done.on))).slice(0, 10);
+  if (done.length) {
+    html += `<details class="card flush disclosure" style="margin-top:16px" ${keep.cookedOpen ? 'open' : ''} data-toggle="cookedOpen"><summary>${icon('check')} Done lately <span class="count">${done.length}</span></summary><ul class="list">` + done.map(x => {
+      const m = mealById(x.mealId);
+      return `<li>${tile(m, 'sm')}<a href="#/recipe/${esc(m.id)}" class="grow"><span class="name">${esc(m.name)}</span><span class="meta">${x.done.skipped ? 'Not making it' : `Cooked ${fmtDay(x.done.on)}`}${x.done.by?.name ? ` · ${esc(x.done.by.name.split(' ')[0])}` : ''}</span></a>
+        <button class="btn small ghost" data-act="uncook" data-id="${esc(x.week)}|${esc(m.id)}">Undo</button></li>`;
+    }).join('') + `</ul></details>`;
+  }
+  // Methods for anything on the list that hasn't got one yet.
+  queueMicrotask(() => todo.forEach(x => { const m = mealById(x.mealId); if (!m.recipeMessage) askRecipe(m); }));
+  return html;
+}
+const markCooked = (wid, id, extra = {}) => S.updateH(['weeks', wid], { [`cooked.${id}`]: { by: S.me(), on: today(), ...extra } });
+actions.cooked = el => { const [wid, id] = el.dataset.id.split('|'); run(() => markCooked(wid, id), `${mealById(id)?.name || 'Dinner'} marked cooked`); };
+actions.notCooking = el => { const [wid, id] = el.dataset.id.split('|'); run(async () => { await markCooked(wid, id, { skipped: true }); if (route === 'recipe') location.hash = '#/cook'; }, 'Taken off the list'); };
+actions.notCookingWeek = el => run(() => S.updateH(['weeks', el.dataset.id], Object.fromEntries(cookList().filter(x => x.week === el.dataset.id && !x.done).map(x => [`cooked.${x.mealId}`, { by: S.me(), on: today(), skipped: true }]))), 'Taken off the list');
+actions.uncook = el => { const [wid, id] = el.dataset.id.split('|'); run(() => S.updateH(['weeks', wid], { [`cooked.${id}`]: S.deleteField() })); };
+
+function viewRecipe() {
+  const m = mealById(arg);
+  if (!m) return empty('book', 'Recipe not found', 'The meal may have been removed.', '<a class="btn" href="#/cook">Back to recipes</a>');
+  // The dinner this recipe is for on the cook list (the oldest still to cook, else the latest done).
+  const entries = cookList().filter(x => x.mealId === m.id);
+  const entry = entries.find(x => !x.done) || entries[entries.length - 1];
+  const r = m.recipe || {};
+  const from = /^https?:\/\//.test(m.source || '') ? m.source : null;
+  let html = `<a class="btn small ghost" href="${entry ? '#/cook' : '#/week'}" style="margin:8px 0 0 -6px">${icon('back')} ${entry ? 'Recipes' : 'This week'}</a>`;
+  html += head(esc(m.name), { eyebrow: entry ? `${weekName(entry.week)} · ${esc(deliveryNote(entry))}` : 'Recipe' });
+  if (m.image && /^https:\/\//.test(m.image)) html += `<img class="recipe-img" src="${esc(m.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`;
+  const facts = [r.time && `${icon('clock')} ${esc(r.time)}`, (r.servings || m.servings) && `${icon('users')} ${esc(/^\d+$/.test(r.servings || m.servings) ? `Serves ${r.servings || m.servings}` : r.servings || m.servings)}`].filter(Boolean);
+  html += `<div class="row recipe-facts">${facts.map(f => `<span class="chip outline">${f}</span>`).join('')}
+    ${from ? `<a class="chip link" href="${esc(from)}" target="_blank" rel="noopener">${icon('link')} ${esc(hostOf(from))}</a>` : ''}
+    ${'wakeLock' in navigator ? `<button class="chip ${wakeLock ? 'ok' : 'outline'}" data-act="screenOn" aria-pressed="${!!wakeLock}">${icon('sun')} ${wakeLock ? 'Screen stays on' : 'Keep screen on'}</button>` : ''}</div>`;
+
+  const lines = r.lines?.length ? r.lines : (m.ingredients || []).map(i => `${i.item}${i.qty > 1 ? ` ×${i.qty}` : ''}${i.pantry ? ' (cupboard)' : ''}`);
+  html += section('Ingredients', { count: lines.length || null });
+  html += lines.length ? `<div class="card"><ul class="ingredients">${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>` : `<div class="card soft"><p class="small muted">No ingredients saved. <a href="#/meal/${esc(m.id)}">Add them</a>.</p></div>`;
+
+  html += section('Method');
+  if (r.steps?.length) {
+    const ticked = keep[`steps:${m.id}`] || [];
+    html += `<div class="card"><ol class="method">${r.steps.map((t, i) => `<li><button class="${ticked.includes(i) ? 'done' : ''}" data-act="step" data-id="${i}" aria-pressed="${ticked.includes(i)}"><span class="n">${i + 1}</span><span class="t">${esc(t)}</span></button></li>`).join('')}</ol>
+      <p class="tiny muted" style="margin:12px 0 0">${r.by === 'claude' ? `${icon('sparkle')} Method written by Claude for your household${from ? `. The original is on <a href="${esc(from)}" target="_blank" rel="noopener">${esc(hostOf(from))}</a>` : ''}. Check timings as you go.` : `From <a href="${esc(from || '#')}" target="_blank" rel="noopener">${esc(hostOf(from || '') || 'the recipe page')}</a>. Tap a step to tick it off.`}</p></div>`;
+  } else if (m.recipeRequested) {
+    html += `<div class="card soft"><div class="row nowrap" style="gap:12px"><span class="spinner" style="flex:none"></span><p class="small muted" style="margin:0">${from ? `Reading the method from ${esc(hostOf(from))}…` : 'Claude is writing the method…'} It takes a minute or two.</p></div></div>`;
+  } else {
+    html += `<div class="card soft"><p class="small muted" style="margin:0 0 10px">${esc(m.recipeMessage || 'No method saved for this one yet.')}</p><button class="btn small tonal" data-act="getRecipe">${icon('sparkle')} ${m.recipeMessage ? 'Try again' : 'Get the method'}</button>${from ? ` <a class="btn small outline" href="${esc(from)}" target="_blank" rel="noopener">${icon('link')} Open ${esc(hostOf(from))}</a>` : ''}</div>`;
+    if (!m.recipeMessage) queueMicrotask(() => askRecipe(m));
+  }
+  html += `<p class="small muted" style="margin:12px 4px 0"><a href="#/meal/${esc(m.id)}">Edit the shop ingredients</a></p>`;
+
+  if (entry && !entry.done) {
+    html += `<div class="actionbar"><div><button class="btn outline" data-act="notCooking" data-id="${esc(entry.week)}|${esc(m.id)}">Not making it</button><span class="spacer"></span>
+      <button class="btn primary" data-act="cooked" data-id="${esc(entry.week)}|${esc(m.id)}">${icon('check')} Cooked it</button></div></div>`;
+  } else if (entry?.done) {
+    html += `<div class="actionbar"><div><span class="sum"><b>${entry.done.skipped ? 'Not making it' : 'Cooked'}</b><span>${fmtDay(entry.done.on)}${entry.done.by?.name ? ` · ${esc(entry.done.by.name.split(' ')[0])}` : ''}</span></span>
+      <button class="btn outline" data-act="uncook" data-id="${esc(entry.week)}|${esc(m.id)}">Undo</button></div></div>`;
+  }
+  return html;
+}
+actions.getRecipe = () => { const m = mealById(arg); if (m) S.updateH(['meals', m.id], { recipeRequested: true, recipeMessage: S.deleteField() }).catch(e => toast(e.message)); };
+actions.step = el => {
+  const k = `steps:${arg}`; const i = +el.dataset.id; const t = keep[k] || [];
+  keep[k] = t.includes(i) ? t.filter(x => x !== i) : [...t, i];
+  render();
+};
+// Keep the phone's screen on while cooking (Screen Wake Lock API). Released on leaving the recipe.
+let wakeLock = null;
+async function screenOn(on) {
+  if (!on) { const w = wakeLock; wakeLock = null; await w?.release().catch(() => {}); return; }
+  try { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { if (wakeLock?.released) { wakeLock = null; render(); } }); }
+  catch { toast('This phone won\'t keep the screen on from here.'); }
+}
+actions.screenOn = () => screenOn(!wakeLock).then(render);
 
 // ---------- List ----------
 function viewList() {
@@ -460,7 +583,7 @@ function viewOrder() {
   if (o.state !== 'placed') html += section('Progress') + `<div class="card flush">${stepsHtml}</div>`;
   if (!['placed', 'failed', 'cancelled', 'review'].includes(o.state)) html += `<div class="row end" style="margin-top:4px"><button class="btn small ghost danger" data-act="cancelOrder">Cancel order</button></div>`;
   if (['failed', 'cancelled'].includes(o.state)) html += `<a class="btn primary block" href="#/shop">Back to the shop to try again</a>`;
-  if (o.state === 'placed') html += `<a class="btn outline block" href="#/week" style="margin-top:12px">Back to this week</a>`;
+  if (o.state === 'placed') html += `<a class="btn primary block" href="#/cook" style="margin-top:12px">${icon('book')} Recipes for these dinners</a><a class="btn outline block" href="#/week" style="margin-top:8px">Back to this week</a>`;
   if (o.log?.length) html += `<details class="card flush disclosure" style="margin-top:12px"><summary>${icon('list')} Details</summary><ul class="list compact small">${o.log.slice(-20).map(l => `<li class="muted">${esc(l)}</li>`).join('')}</ul></details>`;
   return html;
 }
@@ -546,6 +669,7 @@ function viewMeal() {
     <form class="card" data-form="saveMeal">
       <label class="field">Name<input type="text" name="name" value="${esc(m.name)}" required data-keep="mealName"></label>
       ${m.source ? `<p class="small muted">${icon('link')} From <a href="${esc(m.source)}" target="_blank" rel="noopener">${esc(m.source.replace(/^https?:\/\/(www\.)?/, '').split('/')[0])}</a></p>` : ''}
+      ${arg === 'new' ? '' : `<p class="small"><a href="#/recipe/${esc(m.id)}">${icon('book')} View the recipe and method</a></p>`}
       <label class="field">Ingredients<span class="hint">One per line. Add “x2” for two, “(cupboard)” for things you usually have, and “| search words” to pick the exact Sainsbury's product.</span>
         <textarea name="ingredients" rows="10" placeholder="Chicken thighs x2&#10;Lemons | sainsburys unwaxed lemons" data-keep="mealIng">${esc(lines)}</textarea></label>
       ${m.ingredientsBy === 'claude' ? `<p class="small muted">${icon('sparkle')} Ingredients suggested by Claude. Check them over.</p>` : ''}
