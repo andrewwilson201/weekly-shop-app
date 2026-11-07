@@ -148,7 +148,8 @@ export class Sainsburys {
 
   // Goes trolley → checkout → summary and presses "Place order". Returns { orderNumber, card, total }.
   // If the bank asks for an extra check, throws an error with code 'BANK_CHECK'.
-  async placeOrder(expectedTotal) {
+  // dryRun: stop at the summary without pressing Place order (Settings › Order helper › Trial run).
+  async placeOrder(expectedTotal, { dryRun = false } = {}) {
     const p = this.page;
     await p.goto(`${SITE}/gol-ui/trolley`, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await p.waitForTimeout(6000);
@@ -161,7 +162,10 @@ export class Sainsburys {
     if (!/checkout\/summary/.test(p.url())) throw new Error(`Couldn't reach the checkout summary (stopped at ${p.url()}).`);
     const text = await p.innerText('body');
     const total = Number((text.match(/Total to pay\s*£([\d.,]+)/i) || [])[1]?.replace(',', ''));
-    if (expectedTotal && total && Math.abs(total - expectedTotal) > 0.5) {
+    // Never pay without checking the total: if it can't be read (Sainsbury's
+    // changed the page), stop here.
+    if (!(total > 0)) throw new Error('Couldn\'t read the total on Sainsbury\'s checkout page, so I didn\'t place the order. Check out in the Sainsbury\'s app.');
+    if (expectedTotal && Math.abs(total - expectedTotal) > 0.5) {
       throw new Error(`The total changed from £${expectedTotal.toFixed(2)} to £${total.toFixed(2)}, so I didn't place the order. Build the order again to check it.`);
     }
     const card = await p.evaluate(() => {
@@ -169,6 +173,10 @@ export class Sainsburys {
       const l = r && (r.closest('label') || document.querySelector(`label[for="${r.id}"]`));
       return l ? l.innerText.trim().split('\n')[0] : '';
     }).catch(() => '');
+    if (dryRun) {
+      if (!(await p.getByRole('button', { name: /^Place order$/i }).first().isVisible().catch(() => false))) throw new Error('Reached checkout, but couldn\'t find the Place order button.');
+      return { orderNumber: '', card, total, dryRun: true };
+    }
     await p.getByRole('button', { name: /^Place order$/i }).first().click({ timeout: 20000 });
     await p.waitForURL(u => !/checkout\/summary/.test(String(u)), { timeout: 90000 }).catch(() => {});
     await p.waitForTimeout(5000);

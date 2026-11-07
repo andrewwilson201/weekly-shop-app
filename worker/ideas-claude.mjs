@@ -5,6 +5,7 @@
 // back to the rule-based pickIdeas in js/plan.js.
 
 import Anthropic from '@anthropic-ai/sdk';
+import { wouldNot } from '../js/plan.js';
 
 const MODEL = process.env.CLAUDE_MODEL || 'claude-opus-5-5';
 
@@ -54,7 +55,7 @@ const SCHEMA = {
 
 const SYSTEM = `You plan the weekly dinners for a family's online Sainsbury's shop. Each week you offer 10 dinner ideas; the family picks about 5.
 
-Learn from their history: suggest dishes like the ones they pick, and fewer like the ones they keep passing over. Offer a few of the household's favourites, but don't repeat anything they had in the last two weeks.
+Learn from their history: suggest dishes like the ones they pick, and fewer like the ones they keep passing over. After cooking a dinner they say whether they'd make it again (after_cooking in the library): never offer a dish whose latest answer is "would NOT make again", treat their notes (for example "too spicy for the kids") as guidance for new dishes, and favour dishes they'd make again. Offer a few of the household's favourites, but don't repeat anything they had in the last two weeks.
 
 Variety matters as much as taste. These rules are firm:
 - No more than ${MAX_PER_PROTEIN} of the 10 share a main protein (chicken, beef, pork, lamb, turkey, fish, seafood, vegetarian or vegan; vegetarian and vegan count together).
@@ -79,6 +80,8 @@ export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '
   const byId = new Map(meals.map(m => [m.id, m]));
   const library = meals.filter(m => !m.archived).map(m => ({
     id: m.id, name: m.name, tags: m.tags || [], times_picked: m.timesChosen || 0, last_picked: m.lastChosen || null,
+    // "Would you make it again?" answers after cooking, newest last.
+    ...((m.verdicts || []).length ? { after_cooking: m.verdicts.slice(-3).map(v => `${v.again ? 'would make again' : 'would NOT make again'}${v.note ? `: ${v.note}` : ''}`) } : {}),
   }));
   const history = weeks.map(w => ({
     week: w.id,
@@ -124,11 +127,12 @@ export function validate(ideas, byId, featured = []) {
     if (p && !feedUrls.has(i.recipe_url) && (perProtein[p] || 0) >= MAX_PER_PROTEIN + (p === 'vegetarian' ? 1 : 0)) continue;
     const before = out.length;
     if (i.existing_id && byId.has(i.existing_id)) {
-      if (seen.has(i.existing_id)) continue;
+      // Never a dinner they said they wouldn't make again.
+      if (seen.has(i.existing_id) || wouldNot(byId.get(i.existing_id))) continue;
       seen.add(i.existing_id); out.push({ id: i.existing_id, reason: i.reason });
     } else if (!i.existing_id && i.name && i.ingredients?.length) {
       const dup = [...byId.values()].find(m => m.name.toLowerCase() === i.name.toLowerCase());
-      if (dup) { if (!seen.has(dup.id)) { seen.add(dup.id); out.push({ id: dup.id, reason: i.reason }); } }
+      if (dup) { if (!seen.has(dup.id) && !wouldNot(dup)) { seen.add(dup.id); out.push({ id: dup.id, reason: i.reason }); } }
       else {
         const f = feedUrls.get(i.recipe_url);
         // A recipe from a site already in the library (an earlier week) is offered again rather than added twice.

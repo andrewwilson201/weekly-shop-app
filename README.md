@@ -7,10 +7,11 @@ It's built the same way as [music-app](https://github.com/andrewwilson201/music-
 ## How it works
 
 - **Household**: the first person signs in with Google and makes a household. Settings › Share invite link sends a link; whoever opens it and signs in joins. Everything (meals, list, staples, orders) lives under `households/{id}` and only members can read or write it ([`firestore.rules`](firestore.rules)). Changes show up live on both phones.
-- **This week**: 10 meal ideas, favourites (most often picked) first, then ones you haven't had for a while. Either person taps to pick, and chooses a delivery day. Ideas are made each Sunday morning by the *Sunday meal ideas* workflow, or with the button in the app.
-- **Recipes**: the dinners you've shopped for, each with its recipe: the page's own ingredients (with amounts) and method for recipe links and recipe-site ideas, or a method Claude writes for the household for the rest (marked as Claude's, with a link to the original page if there is one). A dinner is fetched or written when it's picked, so it's ready by cooking time. Each one stays on Recipes until someone taps **Cooked** (or **Not making it**), so last week's dinners are still there after the next week's shop is ordered, and This week says how many are left. Earlier weeks count only if an order went ahead for them. On a recipe, tap a step to tick it off, and **Keep screen on** stops the phone going dark while you cook ([`js/plan.js`](js/plan.js) `toCook`).
+- **This week**: 10 meal ideas, favourites (most often picked) first, then ones you haven't had for a while. Either person taps to pick, and chooses a delivery day. Ideas are made each Sunday morning by the `sundayIdeas` Firebase function, or with the button in the app. Ideas nobody picks stay out of the meal library: they're under Meals › *Ideas you didn't pick*, and join the library once picked (or with **Add to meals**).
+- **Recipes**: the dinners you've shopped for, each with its recipe: the page's own ingredients (with amounts) and method for recipe links and recipe-site ideas, or a method Claude writes for the household for the rest (marked as Claude's, with a link to the original page if there is one). A dinner is fetched or written when it's picked, so it's ready by cooking time. Each one stays on Recipes until someone taps **Cooked** (or **Not making it**), so last week's dinners are still there after the next week's shop is ordered, and This week says how many are left. Earlier weeks count only if an order went ahead for them. On a recipe, tap a step to tick it off, and **Keep screen on** stops the phone going dark while you cook ([`js/plan.js`](js/plan.js) `toCook`). After **Cooked it** the app asks **Would you make it again?** with an optional note; Claude reads the answers when it picks ideas, and a “no” stops that dinner being suggested again.
+- **Serving sizes**: Settings › Household › *Cooking for* (4 by default). A recipe that serves a different number has its ingredient amounts scaled on the recipe and its packs scaled in the shop (rounded, at least 1; changes under a quarter are ignored). The − / + on a recipe changes it for that meal only ([`js/plan.js`](js/plan.js) `scaleLine`, `scaleQty`).
 - **List**: the shared shopping list. Type “olive oil x2” for two. Items that get ordered are removed afterwards; ones Sainsbury's didn't have stay.
-- **Shop**: staples that are due, ingredients for the picked meals, and the list, merged into one list. Untick anything you don't need.
+- **Shop**: staples that are due, ingredients for the picked meals, and the list, merged into one list. Untick anything you don't need, change how many with − / +, or add something else at the bottom (it goes on the shared list).
 - **Recipe links**: paste a recipe's web address on Meals (or share the page to Weekly Shop from the phone's share menu, once the app is installed). Straight away (or within a few minutes without the functions) the worker reads the page's recipe data ([`worker/recipe.mjs`](worker/recipe.mjs), the schema.org Recipe most sites include), turns lines like “2 x 400g tins chopped tomatoes” into shop items, and saves it as a meal, picked for this week if you ticked that. Store-cupboard things (oil, salt, spices, stock) are marked “(cupboard)” and left out of the shop unless ticked.
 - **Meals**: the meal library. Each ingredient line is “item x2 | search words”; the search words pick the Sainsbury's product.
 - **Staples**: worked out from past orders (the rules from `build-staples.py`: every-week items always, others when due, skipped if not bought for a long time). Turn one off if you've stopped buying it. On the Shop screen they're in their own section with **Skip all staples**.
@@ -25,7 +26,7 @@ It's built the same way as [music-app](https://github.com/andrewwilson201/music-
 
 ## Ordering
 
-Tapping **Order from Sainsbury's** creates an order. The [order worker](worker/run.mjs) picks it up within about 5–10 minutes (GitHub's schedule) and then:
+Tapping **Send to Sainsbury's** creates an order. The `startOrder` function starts the [order worker](worker/run.mjs) on GitHub straight away (an hourly timer is the backup), and it:
 
 1. logs in to Sainsbury's in a real browser window and waits for the **SMS code**, which either of you types into the app;
 2. lists free 1-hour slots on the chosen day and the day either side; you **pick a time** and it's booked;
@@ -33,14 +34,20 @@ Tapping **Order from Sainsbury's** creates an order. The [order worker](worker/r
 4. waits for someone to tap **Approve**, then presses Place order on Sainsbury's checkout with the saved card, checking the total hasn't changed;
 5. marks the staples as bought, counts the meals as picked, and clears the ordered list items.
 
+The review screen leads with what needs a look (anything not added, offer swaps, and anything already in the Sainsbury's basket from before), then the total; the full basket is folded underneath. Approve only counts for the total on screen.
+
 Cancel at any point releases the slot. If the bank asks for an extra payment check, or something unexpected happens while placing the order, the app says so and you finish in the Sainsbury's app. Substitutions are off on this account.
+
+Safety rules: a run that stops part way (the computer died, GitHub cancelled it) is never restarted, because a restart would add everything to the basket again and must never act on an earlier approval; the order shows as stopped, or as *needs you* if it stopped while placing (it may have gone through). The worker won't press Place order unless it can read Sainsbury's total and it matches the approved one.
+
+**Trial run** (Settings › Order helper): the same steps with this week's shop, up to Sainsbury's checkout summary, where it reads the total and checks the Place order button is there, but doesn't press it. Then it takes out what it added and releases the slot. Nothing is recorded as bought. Use it to check everything works before relying on it.
 
 Sainsbury's findings (Nov 2026): headless browsers get “Access Denied”, a visible browser (under `xvfb-run`) doesn't; login always needs an SMS code; slots, booking and the basket go through the site's own `/groceries-api/gol-services` API; checkout needs at least £25 of items. See [`worker/sainsburys.mjs`](worker/sainsburys.mjs). It's untested from GitHub's servers until the first real run.
 
 ## One-time setup
 
 1. **Hosting**: the app is published to Firebase Hosting at https://weekly-shop-177b1.web.app by the `Deploy site` workflow on every push to `main` (it uses the `FIREBASE_SERVICE_ACCOUNT` secret, which needs the *Firebase Hosting Admin* role). GitHub Pages (Settings › Pages › `main` / root) stays on only to forward old links there. The shop used to live on GitHub Pages, but sharing `andrewwilson201.github.io` with the music app confused Chrome's install check on Android.
-2. **Firestore rules**: paste [`firestore.rules`](firestore.rules) into Firebase console › Firestore Database › Rules › Publish. Also turn on Google sign-in under Authentication › Sign-in method.
+2. **Firestore rules**: the `Deploy database rules` workflow publishes [`firestore.rules`](firestore.rules) whenever it changes on `main`. The `FIREBASE_SERVICE_ACCOUNT` key needs the *Firebase Rules Admin* role for that (add `firebaserules.admin` to the roles loop under Firebase functions below). Also turn on Google sign-in under Authentication › Sign-in method.
 3. **Secrets** (Settings › Secrets and variables › Actions):
    - `FIREBASE_SERVICE_ACCOUNT`: the whole JSON from Firebase console › Project settings › Service accounts › Generate new private key.
    - `SAINSBURYS_EMAIL` and `SAINSBURYS_PASSWORD`.
@@ -49,7 +56,7 @@ Sainsbury's findings (Nov 2026): headless browsers get “Access Denied”, a vi
 
 ## Firebase functions (optional, makes things instant)
 
-Without them, “Ask Claude for ideas”, recipe links, recipe methods and missing ingredients wait for the next worker run (5–15 minutes, GitHub's schedule). The functions in [`functions/`](functions/index.mjs) do the same jobs the moment the app asks, using the same code as the worker ([`worker/jobs.mjs`](worker/jobs.mjs), copied in at deploy time). Orders still go through the worker, because they need a real browser, but `startOrder` starts the worker the moment an order is sent, and `sundayIdeas` makes Sunday's ideas on a Firebase schedule (GitHub's own timer can lag by hours or not fire at all). The worker token is a fine-grained GitHub token for this repo with **Actions: read and write**. They need the Blaze plan; at this usage they stay inside the free allowance.
+Without them, “Ask Claude for ideas”, recipe links, recipe methods and missing ingredients wait for the next worker run (up to an hour, on GitHub's backup timer). The functions in [`functions/`](functions/index.mjs) do the same jobs the moment the app asks, using the same code as the worker ([`worker/jobs.mjs`](worker/jobs.mjs), copied in at deploy time). Orders still go through the worker, because they need a real browser, but `startOrder` starts the worker the moment an order is sent, and `sundayIdeas` makes Sunday's ideas on a Firebase schedule (GitHub's own timer can lag by hours or not fire at all), so there's no GitHub workflow for them. `keepWorkerOn` switches the order worker workflow back on every Monday, because GitHub turns off timed workflows in a repo that hasn't changed for 60 days, and a switched-off workflow can't be started by `startOrder` either. The worker token is a fine-grained GitHub token for this repo with **Actions: read and write**. They need the Blaze plan; at this usage they stay inside the free allowance.
 
 Deploy from [Google Cloud Shell](https://shell.cloud.google.com) (the Firebase CLI is already there):
 
@@ -67,7 +74,7 @@ The functions run in `europe-west2` (London), next to the database. After that f
 
 ```sh
 SA=$(gcloud iam service-accounts list --project weekly-shop-177b1 --filter="email~firebase-adminsdk" --format="value(email)")
-for r in cloudfunctions.admin run.admin eventarc.admin cloudscheduler.admin iam.serviceAccountUser secretmanager.admin artifactregistry.admin serviceusage.serviceUsageConsumer; do
+for r in firebaserules.admin cloudfunctions.admin run.admin eventarc.admin cloudscheduler.admin iam.serviceAccountUser secretmanager.admin artifactregistry.admin serviceusage.serviceUsageConsumer; do
   gcloud projects add-iam-policy-binding weekly-shop-177b1 --member="serviceAccount:$SA" --role="roles/$r" --condition=None --quiet > /dev/null && echo "added $r"
 done
 ```
@@ -82,7 +89,8 @@ firebase emulators:start --only auth,firestore      # Firestore on 8081, Auth on
 python3 -m http.server 8000                          # then open http://localhost:8000/?emulator
 npm test                                             # unit tests: due rule, skips, holiday weeks, shop merging, recipe parsing
 node tools/copy-shared.mjs && npm --prefix functions install && node test/functions-check.mjs   # function handlers, pretend Claude
-sh test/reset-emulators.sh && node test/e2e.mjs      # two people, a recipe link, pretend Claude ideas (CLAUDE_FAKE=1), a pretend shop (SAINSBURYS_FAKE=1), order to "placed"
+sh test/reset-emulators.sh && node test/e2e.mjs      # two people, a recipe link, pretend Claude ideas (CLAUDE_FAKE=1), a pretend shop (SAINSBURYS_FAKE=1), order to "placed", a trial run
+# The e2e test uses made-up staples (test/fixtures/staples.json); SEED=seed.json uses a real seed instead.
 ```
 
 With `?emulator` the sign-in page also offers a test email sign-in, because Google sign-in needs Google's servers.

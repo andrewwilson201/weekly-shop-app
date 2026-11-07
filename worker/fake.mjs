@@ -45,5 +45,8 @@ export class FakeSainsburys {
     if (it.quantity <= 0) this.items.splice(i, 1);
   }
   async orders() { return []; }
-  async placeOrder(expected) { return { orderNumber: '1000000001', card: 'Test card ending 0000', total: expected }; }
+  async placeOrder(expected, { dryRun = false } = {}) {
+    if (dryRun) return { orderNumber: '', card: 'Test card ending 0000', total: expected, dryRun: true };
+    return { orderNumber: '1000000001', card: 'Test card ending 0000', total: expected };
+  }
 }
