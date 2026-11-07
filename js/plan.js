@@ -206,6 +206,13 @@ export function unitCost(p, qty = 1) {
   return size ? eachPrice(p, qty) / size : null;
 }
 
+// Is it on offer at this quantity? Either a price cut (Nectar prices
+// included: the unit price is below what it was) or a multibuy the line gets.
+export function onOffer(p, qty = 1) {
+  if (p.was && p.unit && Number(p.was) > Number(p.unit) + 0.001) return true;
+  return eachPrice(p, qty) < Number(p.price) - 0.001;
+}
+
 // Words to search for a product we already know by name: drops the store
 // brand, range names, pack sizes and counts, so similar products come up too.
 export function searchTerms(name = '') {
@@ -223,14 +230,15 @@ export function searchTerms(name = '') {
 // line would otherwise get (the usual, or the search's top match); `others`
 // are products judged to be the same thing. Only ones in the same measure and
 // a similar pack size (75%–135% of ref) are compared, so the line's quantity
-// still means the same amount of food. A swap needs to save at least 3% and
+// still means the same amount of food. Only products on offer are swapped to
+// (Andrew, 2026-11-07: not just because a basic version is cheaper). A swap needs to save at least 3% and
 // 10p across the line. Returns { product, saving } or null to keep ref.
 export function cheapestSwap(ref, others, qty = 1) {
   const refCost = unitCost(ref, qty), refSize = packSize(ref);
   if (!refCost || !refSize || ref.catchweight) return null;
   let best = null;
   for (const p of others) {
-    if (!p || String(p.uid) === String(ref.uid) || p.available === false || p.catchweight || p.measure !== ref.measure) continue;
+    if (!p || String(p.uid) === String(ref.uid) || p.available === false || p.catchweight || p.measure !== ref.measure || !onOffer(p, qty)) continue;
     const size = packSize(p), cost = unitCost(p, qty);
     if (!size || !cost || size < refSize * 0.75 || size > refSize * 1.35) continue;
     if (!best || cost < best.cost) best = { p, cost };

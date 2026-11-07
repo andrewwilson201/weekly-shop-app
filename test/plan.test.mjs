@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { stapleStatus, buildShop, weekId, awayWeek, awayOn, matchUsual, recordBought, parseMultibuy, eachPrice, packSize, unitCost, searchTerms, cheapestSwap } from '../js/plan.js';
+import { stapleStatus, buildShop, weekId, awayWeek, awayOn, matchUsual, recordBought, parseMultibuy, eachPrice, onOffer, packSize, unitCost, searchTerms, cheapestSwap } from '../js/plan.js';
 
 test('staple due rule matches build-staples.py', () => {
   assert.equal(stapleStatus({ rule: 'every_week' }, '2026-11-10'), 'add');
@@ -103,11 +103,12 @@ test('recordBought counts a purchase and adds new products', () => {
 // Prices as Sainsbury's search returned them on 2026-11-07 (store 0031).
 const P = {
   mild: { uid: '7178847', name: "Sainsbury's British Mild Cheddar Cheese 400g", price: 3.2, unit: 8, measure: 'kg', offer: '' },
-  cathedral: { uid: '7511803', name: 'Cathedral City Mild Cheddar Cheese 350g', price: 2.8, unit: 8, measure: 'kg', offer: 'Save 25% with Nectar' },
+  cathedral: { uid: '7511803', name: 'Cathedral City Mild Cheddar Cheese 350g', price: 2.8, unit: 8, was: 10.71, measure: 'kg', offer: 'Save 25% with Nectar' },
   stamford600: { uid: '7646860', name: 'Stamford Street Co. Mild Cheddar 600g', price: 3.67, unit: 6.12, measure: 'kg', offer: '' },
   napolina: { uid: '2274379', name: 'Napolina Chopped Tomatoes 400g', price: 1.05, unit: 2.63, measure: 'kg', offer: '' },
   sainsTom: { uid: '6365335', name: "Sainsbury's Chopped Tomatoes Can 400g", price: 0.45, unit: 1.13, measure: 'kg', offer: '' },
-  cirio4: { uid: '8265466', name: 'Cirio 4 x 400g Finely Chopped Tomatoes', price: 2.5, unit: 1.57, measure: 'kg', offer: 'Half Price with Nectar' },
+  cirio4: { uid: '8265466', name: 'Cirio 4 x 400g Finely Chopped Tomatoes', price: 2.5, unit: 1.57, was: 3.13, measure: 'kg', offer: 'Half Price with Nectar' },
+  cirio1: { uid: 'x-cirio-400', name: 'Cirio Finely Chopped Tomatoes 400g', price: 0.75, unit: 1.88, was: 2.5, measure: 'kg', offer: 'Save 25% with Nectar' },
   chicken320: { uid: '7977681', name: "Sainsbury's 320g British Fresh Skinless & Boneless Chicken Breast Fillets", price: 2.44, unit: 7.63, measure: 'kg', offer: 'Buy 2 for £4.00 with Nectar' },
   chicken640: { uid: '7874927', name: "Sainsbury's 640g British Fresh Skinless & Boneless Chicken Breast Fillets", price: 4.62, unit: 7.22, measure: 'kg', offer: 'Buy 2 for £8.00 with Nectar' },
   bananas8: { uid: '7553276', name: "Sainsbury's Fairtrade Bananas x8", price: 1.39, unit: 0.17, measure: 'ea', offer: '' },
@@ -138,10 +139,13 @@ test('search words drop the store brand, range and pack size', () => {
 });
 
 test('cheapest swap compares price per kg at a similar pack size', () => {
-  // Napolina 400g → Sainsbury's 400g tin; the Cirio 4-pack is cheaper per kg but four times the size.
-  const s = cheapestSwap(P.napolina, [P.cirio4, P.sainsTom], 2);
-  assert.equal(s.product.uid, P.sainsTom.uid);
-  assert.equal(s.saving, 1.2);
+  // Only products on offer are swapped to: Sainsbury's own tin is cheaper but not on offer.
+  assert.ok(onOffer(P.cathedral) && onOffer(P.chicken320, 2) && !onOffer(P.chicken320, 1) && !onOffer(P.sainsTom));
+  assert.equal(cheapestSwap(P.napolina, [P.sainsTom], 2), null);
+  // Napolina 400g → a 400g tin on offer; the Cirio 4-pack is on offer too but four times the size.
+  const s = cheapestSwap(P.napolina, [P.cirio4, P.sainsTom, P.cirio1], 2);
+  assert.equal(s.product.uid, P.cirio1.uid);
+  assert.equal(s.saving, 0.6);
   // Same price per kg (Nectar price included) isn't worth swapping for.
   assert.equal(cheapestSwap(P.mild, [P.cathedral], 1), null);
   // 600g is more than 35% bigger than 400g.

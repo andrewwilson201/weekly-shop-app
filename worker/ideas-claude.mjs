@@ -231,7 +231,7 @@ export async function claudeSwaps(asks, notes = '') {
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
     output_config: { effort: 'low', format: { type: 'json_schema', schema: SWAP_SCHEMA } },
-    system: `You help a family save money on their Sainsbury's shop without them noticing a worse product. Each line has the product it would get ("current": their usual, or the top search match) and other options from the shop. List the options that would do just as well, so the cheapest of those can be bought instead.
+    system: `You help a family save money on their Sainsbury's shop without them noticing a worse product. The options are all on offer this week. Each line has the product it would get ("current": their usual, or the top search match) and other options from the shop. List the options that would do just as well, so the cheapest of those can be bought instead.
 
 An option counts only if it is the same kind of product, for the same use, and keeps every quality the current one has: organic stays organic, free range stays free range, higher welfare, outdoor bred, Fairtrade, British, MSC stay; same cut and form (breast fillets not thighs or mini fillets, a block not slices or grated, fresh not frozen or long life, whole not diced); same fat level, flavour, variety and dietary type (lactose free, gluten free, wholewheat). Pack size doesn't matter here (it's checked separately).
 

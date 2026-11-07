@@ -14,7 +14,7 @@ export class FakeSainsburys {
     const slug = term.toLowerCase().replace(/\W+/g, '-');
     const out = [{ uid: `p-${slug}`.slice(0, 40), name: `Sainsbury's ${term}`, price: 1.5, unit: 3.75, measure: 'kg', per: 1, offer: '', available: true }];
     // Beans have a cheaper equivalent on offer, to test cheaper swaps.
-    if (/beans/i.test(term)) out.push({ uid: `p-cheaper-${slug}`.slice(0, 40), name: `Cheaper ${term}`, price: 1, unit: 2.5, measure: 'kg', per: 1, offer: 'Half Price with Nectar', available: true });
+    if (/beans/i.test(term)) out.push({ uid: `p-cheaper-${slug}`.slice(0, 40), name: `Cheaper ${term}`, price: 1, unit: 2.5, was: 5, measure: 'kg', per: 1, offer: 'Half Price with Nectar', available: true });
     return out;
   }
   async slots() {
