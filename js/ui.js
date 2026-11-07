@@ -42,16 +42,38 @@ const P = {
 };
 export const icon = (name, cls = '') => `<svg viewBox="0 0 24 24"${cls ? ` class="${cls}"` : ''} aria-hidden="true">${P[name] || ''}</svg>`;
 
-// Which tile a meal gets: from Claude's protein label, else a guess from the name.
-export function mealKind(m) {
-  const p = (m.protein || '').toLowerCase();
-  const n = (m.name || '').toLowerCase();
-  if (['chicken', 'turkey'].includes(p) || (!p && /chicken|turkey|duck/.test(n))) return 'poultry';
-  if (['fish', 'seafood'].includes(p) || (!p && /salmon|fish|cod|tuna|prawn|haddock|mackerel|trout|seafood|shrimp/.test(n))) return 'fish';
-  if (['beef', 'pork', 'lamb'].includes(p) || (!p && /beef|lamb|pork|sausage|pancetta|bacon|chorizo|mince|ham|steak|kofta|meatball|burger/.test(n))) return 'meat';
-  if (['vegetarian', 'vegan'].includes(p) || (!p && /veg|bean|lentil|halloumi|tofu|paneer|squash|spinach|mushroom|cauliflower|chickpea|risotto|margherita|cheese/.test(n))) return 'veg';
-  return 'other';
+// Meal categories for the Meals list, most specific first. A meal's own
+// category (set on its edit screen) wins; then Claude's protein label; then a
+// guess from the name; then from the main ingredients.
+export const MEAL_CATEGORIES = [
+  ['chicken', 'Chicken & turkey', 'poultry', /chicken|turkey|duck/],
+  ['fish', 'Fish & seafood', 'fish', /salmon|fish|cod\b|tuna|prawn|haddock|mackerel|trout|seafood|shrimp|squid|mussel|crab|hake|pollock|sea bass|kedgeree/],
+  ['beef', 'Beef', 'meat', /beef|steak|mince|burger|bolognese|meatball|cottage pie|chilli con carne/],
+  ['pork', 'Pork, sausages & ham', 'meat', /pork|sausage|pancetta|bacon|chorizo|\bham\b|gammon|carbonara|salami|pepperoni|hot dog/],
+  ['lamb', 'Lamb', 'meat', /lamb|kofta|moussaka|shepherd/],
+  ['veg', 'Vegetarian', 'veg', /vegetarian|vegan|veggie|\bveg\b|bean|lentil|dhal|dal\b|halloumi|tofu|paneer|squash|spinach|mushroom|cauliflower|chickpea|falafel|risotto|margherita|mozzarella|cheese|feta|aubergine|courgette|sweet potato|\beggs?\b/],
+  ['other', 'Other', 'other', null],
+];
+const PROTEIN_CAT = { chicken: 'chicken', turkey: 'chicken', duck: 'chicken', fish: 'fish', seafood: 'fish', beef: 'beef', pork: 'pork', lamb: 'lamb', vegetarian: 'veg', vegan: 'veg' };
+const CAT_KEYS = new Set(MEAL_CATEGORIES.map(c => c[0]));
+const guess = text => (MEAL_CATEGORIES.find(([, , , re]) => re && re.test(text)) || [])[0];
+// The category worked out without the meal's own choice: used for "Automatic".
+export function autoCategory(m) {
+  const p = PROTEIN_CAT[(m.protein || '').toLowerCase()];
+  if (p) return p;
+  const fromTags = (m.tags || []).map(t => PROTEIN_CAT[String(t).toLowerCase()]).find(Boolean);
+  if (fromTags) return fromTags;
+  const byName = guess((m.name || '').toLowerCase());
+  if (byName) return byName;
+  // Then the meat or fish among the main ingredients. Cupboard things like stock
+  // cubes would mislead, and most meals have some veg, so veg isn't guessed here.
+  const main = (m.ingredients || []).filter(i => !i.pantry && !/stock|gravy/i.test(i.item || '')).map(i => i.item || '').join(' | ').toLowerCase();
+  const g = guess(main);
+  return g && g !== 'veg' ? g : 'other';
 }
+export const mealCategory = m => (CAT_KEYS.has(m.category) ? m.category : autoCategory(m));
+// Which tile a meal gets: follows its category.
+export const mealKind = m => MEAL_CATEGORIES.find(c => c[0] === mealCategory(m))[2];
 const KIND_ICON = { poultry: 'drumstick', fish: 'fish', meat: 'meat', veg: 'leaf', other: 'bowl' };
 export const tile = (m, size = '') => `<span class="tile ${mealKind(m)}${size ? ` ${size}` : ''}">${icon(KIND_ICON[mealKind(m)])}</span>`;
 

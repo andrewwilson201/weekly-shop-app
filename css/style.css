@@ -448,3 +448,10 @@ a.chip:hover { text-decoration: none; }
 .method .n { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-soft-text); font: 700 13px/1 var(--sans); margin-top: -1px; }
 .method button.done .t { color: var(--faint); text-decoration: line-through; }
 .method button.done .n { background: var(--ok-soft); color: var(--ok-text); }
+
+/* Meals grouped into collapsible categories */
+.cat-list { display: grid; gap: 8px; }
+.cat-list details.cat > summary { padding: 10px 14px; }
+.cat-list details.cat > summary .grow { flex: 1; }
+.cat-list details.cat > summary .count { margin-left: auto; }
+.cat-list details.cat > summary::after { margin-left: 4px; }
