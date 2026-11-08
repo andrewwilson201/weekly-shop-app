@@ -5,7 +5,6 @@
   "description": "Shared weekly Sainsbury's shop. The site is static (no build step); these packages are for the order worker and tests.",
   "scripts": {
     "worker": "xvfb-run -a node worker/run.mjs",
-    "ideas": "node worker/run.mjs ideas",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {

@@ -6,7 +6,7 @@
 //   invites/{code}                  { hid, name }
 //   households/{hid}                { name, members[], memberNames{uid:name}, inviteCode, store, createdAt }
 //   households/{hid}/meals/{id}     { name, tags[], ingredients[{item, search, qty, uid?}], timesChosen, lastChosen, lastOffered, archived }
-//   households/{hid}/weeks/{sunday} { offered[mealId], picks{mealId: uid}, deliveryDate, extras{lineKey: bool}, status }
+//   households/{hid}/weeks/{weekStart} { offered[mealId], picks{mealId: uid}, deliveryDate, extras{lineKey: bool}, status }
 //   households/{hid}/list/{id}      { text, qty, addedBy, addedAt, done }
 //   households/{hid}/staples/{id}   { product_uid, name, rule, quantity, every_days, last_bought, dropped }
 //   households/{hid}/imports/{id}   recipe link to read: { url, addToWeek, by, state: requested|done|failed, mealId, name, count, message }

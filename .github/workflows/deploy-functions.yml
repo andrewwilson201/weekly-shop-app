@@ -1,7 +1,7 @@
 name: Deploy functions
 
-# Redeploys the Firebase functions (Ask Claude for ideas, Sunday ideas,
-# recipe links, missing ingredients, starting orders) whenever code they use
+# Redeploys the Firebase functions (Ask Claude for ideas, recipe links,
+# missing ingredients, starting orders) whenever code they use
 # changes on main. The FIREBASE_SERVICE_ACCOUNT key needs the extra roles in
 # the README (One-time setup › Functions deploy).
 on:

@@ -3,9 +3,8 @@
 // GitHub Actions worker (which still runs every few minutes as a backup).
 // Orders still go through the worker, because they need a real browser, but
 // a new order starts it straight away (GitHub's own timer proved unreliable).
-// Sunday's meal ideas are made here on a Firebase schedule for the same reason
-// (this is the only place they're made; GitHub's copy was removed so they
-// aren't made twice).
+// Meal ideas are made when someone asks for them in the app (there's no fixed
+// day: order whenever the food runs out).
 //
 // Deploy (from Google Cloud Shell or any machine with the Firebase CLI):
 //   firebase functions:secrets:set ANTHROPIC_API_KEY
@@ -19,8 +18,6 @@ import { onDocumentCreated, onDocumentWritten } from 'firebase-functions/v2/fire
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { defineSecret } from 'firebase-functions/params';
 import { makeJobs } from './shared/worker/jobs.mjs';
-import { notify } from './shared/worker/notify.mjs';
-import { weekId, awayWeek } from './shared/js/plan.js';
 
 initializeApp();
 const db = getFirestore();
@@ -59,18 +56,6 @@ export const mealRecipe = onDocumentWritten({ ...opts, document: 'households/{hi
   const after = event.data?.after;
   if (after?.data()?.recipeRequested !== true || event.data.before?.data()?.recipeRequested === true) return;
   await jobs.fillRecipe(await household(event.params.hid), after.ref);
-}));
-
-// Sunday 07:30 UK time: make each household's ideas for the week and tell
-// their phones. Skips weeks that already have ideas, and weeks away.
-export const sundayIdeas = onSchedule({ ...opts, schedule: '30 7 * * 0', timeZone: 'Europe/London', timeoutSeconds: 540 }, withKey(async () => {
-  const sunday = weekId(new Date());
-  for (const h of (await db.collection('households').get()).docs) {
-    if ((await h.ref.collection('weeks').doc(sunday).get()).exists) continue;
-    if (awayWeek(h.data().away, sunday)) continue;
-    await jobs.makeIdeas(h, sunday, 'sunday');
-    await notify(h, { title: 'This week\'s meal ideas are ready', body: 'Pick your dinners and a delivery day.', link: '#/week', tag: 'ideas' });
-  }
 }));
 
 // A new order: start the order worker on GitHub now rather than waiting for

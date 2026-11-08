@@ -63,11 +63,5 @@ await fns.startOrder.run({ data: await order2.get(), params: { hid: 'fn-test', o
 assert(/didn't start/.test((await order2.get()).data().message || ''), 'a failed dispatch is shown on the order');
 globalThis.fetch = realFetch;
 
-// Sunday: ideas made for a household without this week's ideas yet.
-const thisSunday = h.collection('weeks').doc((await import('../js/plan.js')).weekId(new Date()));
-await thisSunday.delete();
-await fns.sundayIdeas.run({});
-const sun = (await thisSunday.get()).data();
-assert(sun?.offered?.length >= 9 && sun.madeBy !== 'request', 'Sunday ideas made on schedule');
 console.log('Functions OK');
 process.exit(0);
