@@ -55,7 +55,7 @@ async function makeIdeasInner(h, sunday, madeBy, keep) {
     const weeks = (await h.ref.collection('weeks').orderBy('createdAt', 'desc').limit(8).get()).docs.map(d => ({ id: d.id, ...d.data() })).filter(w => w.id !== sunday);
     const skipped = (await h.ref.collection('staples').where('skips', '>', 0).get()).docs.map(d => d.data().name);
     const month = new Date().toLocaleDateString('en-GB', { month: 'long', timeZone: 'Europe/London' });
-    const ideas = await claudeIdeas({ meals, weeks, skippedStaples: skipped, notes: h.data().notes || '', season: `${month}, UK`, featured });
+    const ideas = await claudeIdeas({ meals, weeks, skippedStaples: skipped, notes: h.data().notes || '', month, featured });
     if (ideas?.length >= 6) {
       offered = [...keep];
       const b = db.batch();
