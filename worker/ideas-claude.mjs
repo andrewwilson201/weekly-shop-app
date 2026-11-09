@@ -13,6 +13,31 @@ export const PROTEINS = ['chicken', 'beef', 'pork', 'lamb', 'turkey', 'fish', 's
 // At most this many of the 10 share a main protein (vegetarian dishes count together with vegan).
 export const MAX_PER_PROTEIN = 2;
 
+// What's in season in the UK each month (UK-grown veg and fruit, plus the
+// game and fish at their best), and the weather it brings. Shown to Claude
+// so new dishes lean on cheap, good produce and suit the time of year.
+export const SEASONAL = {
+  January: { mood: 'winter', produce: 'leeks, parsnips, swede, celeriac, kale, cavolo nero, savoy and red cabbage, Brussels sprouts, cauliflower, Jerusalem artichokes, forced rhubarb, apples, pears, mussels' },
+  February: { mood: 'winter', produce: 'leeks, parsnips, swede, celeriac, kale, savoy cabbage, purple sprouting broccoli, cauliflower, Jerusalem artichokes, forced rhubarb, apples, mussels' },
+  March: { mood: 'early spring', produce: 'purple sprouting broccoli, spring greens, leeks, cauliflower, spinach, wild garlic, spring onions, forced rhubarb, cabbage' },
+  April: { mood: 'spring', produce: 'asparagus (from late April), purple sprouting broccoli, spring greens, spinach, wild garlic, radishes, spring onions, watercress, rhubarb, Jersey Royal potatoes' },
+  May: { mood: 'late spring', produce: 'asparagus, Jersey Royal and new potatoes, spinach, radishes, spring onions, lettuce, watercress, broad beans, peas (late May), rhubarb, crab' },
+  June: { mood: 'summer', produce: 'asparagus (early June), new potatoes, peas, broad beans, courgettes, lettuce, radishes, cucumber, spinach, strawberries, cherries, gooseberries, mackerel, crab' },
+  July: { mood: 'summer', produce: 'courgettes, runner and French beans, peas, broad beans, new potatoes, tomatoes, cucumber, lettuce, beetroot, fennel, sweetcorn (late July), strawberries, raspberries, cherries, mackerel' },
+  August: { mood: 'late summer', produce: 'tomatoes, sweetcorn, courgettes, aubergines, peppers, runner and French beans, beetroot, fennel, cucumber, lettuce, plums, blackberries, raspberries, mackerel' },
+  September: { mood: 'early autumn', produce: 'tomatoes, sweetcorn, peppers, aubergines, courgettes, squash (from late September), beetroot, leeks, kale, cauliflower, apples, pears, plums, blackberries, mussels' },
+  October: { mood: 'autumn', produce: 'butternut and other squash, pumpkin, leeks, parsnips, carrots, beetroot, kale, celeriac, cabbage, cauliflower, wild mushrooms, apples, pears, mussels' },
+  November: { mood: 'late autumn', produce: 'squash, pumpkin, leeks, parsnips, swede, celeriac, kale, cavolo nero, Brussels sprouts, red and savoy cabbage, cauliflower, Jerusalem artichokes, apples, pears, cranberries, mussels' },
+  December: { mood: 'winter', produce: 'Brussels sprouts, parsnips, swede, leeks, celeriac, kale, red and savoy cabbage, cauliflower, Jerusalem artichokes, chestnuts, apples, pears, cranberries, mussels' },
+};
+
+// "Time of year" lines for the ideas message. month is a full English month name.
+export function seasonNote(month) {
+  const s = SEASONAL[month];
+  if (!s) return `Time of year: ${month || 'unknown'}, UK`;
+  return `Time of year: ${month} in the UK (${s.mood})\nIn season in the UK now: ${s.produce}`;
+}
+
 const SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -65,15 +90,21 @@ Variety matters as much as taste. These rules are firm:
 - 4 or 5 dishes they haven't had, chosen to suit what they evidently like but stretching them a little. Don't offer a variation of something already in the 10 or in their library.
 - Avoid anything offered in the last 3 weeks unless it's a clear favourite.
 
+Cook with the season (the message gives the month and what's in season in the UK):
+- Build new dishes around the produce that's in season now, and when choosing library meals favour ones that use it. Seasonal veg is cheaper and tastes better.
+- Let the weather lead the mix: in the colder months lean towards warming food (stews, casseroles, soups, pies, roasts, curries, bakes); in the warmer months lean towards lighter food (salads, grills and barbecue, wraps, quick stir-fries, cold noodles).
+- Lean, don't exclude. Most of the 10 should suit the season, but always keep 1 or 2 that go against it, such as a hearty warm salad or grain bowl in winter, or a light stew, curry or soup in summer. Never drop salads entirely in winter or stews entirely in summer.
+- Library favourites can be offered at any time of year; just don't let out-of-season dishes take over.
+
 For every new dish, list the ingredients to buy for that dinner for the whole household, as Sainsbury's shop items. Mark store-cupboard basics as pantry.
 
-When the message lists recipes newly published on the family's chosen recipe sites, include exactly one from each site (the one that best suits this family) as a new dish, with recipe_url set to its url and the name as published. These count towards the new dishes and the variety rules; list their ingredients as for any new dish.
+When the message lists recipes newly published on the family's chosen recipe sites, include exactly one from each site (the one that best suits this family and the season) as a new dish, with recipe_url set to its url and the name as published. These count towards the new dishes and the variety rules; list their ingredients as for any new dish.
 
 Respect any notes about the household (ages, dislikes, allergies, how adventurous they are). Write each reason as one short, friendly sentence addressed to the family.`;
 
 // featured: recipes newly published on the household's recipe sites
 // ([{ source, title, url, published, summary }]); one per site is asked for.
-export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '', season = '', featured = [] }) {
+export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '', month = '', featured = [] }) {
   if (process.env.CLAUDE_FAKE) return fakeIdeas(meals, featured); // tests: no API call
   if (!process.env.ANTHROPIC_API_KEY) return null;
   const client = new Anthropic();
@@ -92,7 +123,7 @@ export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '
 
   const prompt = [
     `Household notes: ${notes || 'none given'}`,
-    `Time of year: ${season}`,
+    seasonNote(month),
     `Meal library (JSON):\n${JSON.stringify(library)}`,
     `Recent weeks, newest first (JSON):\n${JSON.stringify(history)}`,
     offeredRecently.length ? `Offered in the last 3 weeks: ${offeredRecently.join('; ')}` : '',
