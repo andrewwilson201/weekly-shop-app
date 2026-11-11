@@ -42,12 +42,13 @@ export function planCmp(a, b) {
   const [da, na] = planKey(a), [db, nb] = planKey(b);
   return da < db ? -1 : da > db ? 1 : na - nb;
 }
-// The plan being worked on: the newest one, unless it has been ordered, in
-// which case a new one (not saved until someone does something with it).
+// The plan being worked on: the newest one, unless it has been ordered (or
+// put aside with "Start afresh": status 'closed'), in which case a
+// new one (not saved until someone does something with it).
 export function currentPlanId(weeks = {}, today = iso(new Date())) {
   const ids = Object.keys(weeks).sort(planCmp);
   const last = ids[ids.length - 1];
-  if (last && weeks[last].status !== 'ordered') return last;
+  if (last && !['ordered', 'closed'].includes(weeks[last].status)) return last;
   return newPlanId(ids, today);
 }
 export function newPlanId(ids = [], today = iso(new Date())) {
@@ -84,14 +85,14 @@ export function stapleStatus(s, delivery) {
 }
 
 // Dinners to cook, for the Recipes screen. Each dinner stays there until
-// someone marks it cooked (or not making it), so last week's are still there
-// after the next week's shop has been ordered. Which weeks count:
-//   this week: its picks, ordered or not yet;
-//   earlier weeks: the dinners of an order that went ahead (any order that
+// someone marks it cooked (or not making it), so the last shop's are still
+// there after the next one has been ordered. Which plans count:
+//   the current plan: its picks, ordered or not yet;
+//   earlier plans: the dinners of an order that went ahead (any order that
 //   wasn't cancelled; a failed one may have been finished in Sainsbury's app).
-//   Earlier weeks with no order at all are left out, since nothing was bought.
-// weeks: { id: week doc }, orders: order docs, current: this week's id.
-// Returns [{ week, mealId, ordered, delivery, done }], oldest week first.
+//   Earlier plans with no order at all are left out, since nothing was bought.
+// weeks: { id: plan doc }, orders: order docs, current: the current plan's id.
+// Returns [{ week, mealId, ordered, delivery, done }], oldest plan first.
 export function toCook({ weeks = {}, orders = [], current }) {
   const out = [];
   for (const w of Object.values(weeks).sort((a, b) => planCmp(a.id, b.id))) {

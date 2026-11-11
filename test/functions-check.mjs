@@ -7,13 +7,29 @@ process.env.GCLOUD_PROJECT = 'weekly-shop-177b1';
 process.env.CLAUDE_FAKE = '1';
 process.env.ANTHROPIC_API_KEY = 'fake';
 process.env.WORKER_GITHUB_TOKEN = 'fake-token';
+// Check the access list (worker/access.mjs) here, which emulator tests otherwise skip.
+process.env.ACCESS_CHECK = '1';
 const fns = await import('../functions/index.mjs');
+const { checkWorker, remindCutoff } = await import('../functions/tasks.mjs');
+const { forgetAccessCache } = await import('../functions/shared/worker/access.mjs');
 const { getFirestore, FieldValue } = await import('../functions/node_modules/firebase-admin/lib/firestore/index.js');
 const db = getFirestore();
 const assert = (c, m) => { if (!c) throw new Error(`FAILED: ${m}`); console.log(`ok - ${m}`); };
 
 const h = db.collection('households').doc('fn-test');
 await h.set({ members: ['u1'], name: 'Test', inviteCode: 'abcdefghijk' });
+await db.collection('config').doc('access').set({ households: ['fn-test'] });
+forgetAccessCache();
+
+// A household that isn't on the access list gets nothing done for it.
+const other = db.collection('households').doc('fn-stranger');
+await other.set({ members: ['u9'], name: 'Stranger', inviteCode: 'zyxwvutsrqp' });
+const strangerMeal = await other.collection('meals').add({ name: 'Free lunch', ingredients: [], timesChosen: 0 });
+await fns.newMeal.run({ data: await strangerMeal.get(), params: { hid: 'fn-stranger', mid: strangerMeal.id } });
+assert(!(await strangerMeal.get()).data().ingredients.length, 'a household not on the access list doesn\'t get Claude');
+const strangerOrder = await other.collection('orders').add({ state: 'requested', week: '2026-11-01' });
+await fns.startOrder.run({ data: await strangerOrder.get(), params: { hid: 'fn-stranger', oid: strangerOrder.id } });
+assert((await strangerOrder.get()).data().state === 'cancelled', 'a household not on the access list can\'t start orders');
 const meals = [];
 for (let i = 0; i < 7; i++) meals.push(await h.collection('meals').add({ name: `Meal ${i}`, ingredients: [{ item: 'Pasta', qty: 1, search: 'pasta' }], timesChosen: i }));
 
@@ -62,6 +78,29 @@ const order2 = await h.collection('orders').add({ state: 'requested', week: '202
 await fns.startOrder.run({ data: await order2.get(), params: { hid: 'fn-test', oid: order2.id } });
 assert(/didn't start/.test((await order2.get()).data().message || ''), 'a failed dispatch is shown on the order');
 globalThis.fetch = realFetch;
+
+// The weekly key check: keeps the worker on and records when its key runs out.
+{
+  const now = new Date('2026-11-11T06:00:00Z');
+  const github = async () => new Response('{}', { status: 200, headers: { 'github-authentication-token-expiration': '2026-11-20 10:00:00 UTC' } });
+  const status = await checkWorker(db, github, now);
+  const saved = (await h.get()).data().orderHelper;
+  assert(status.ok && saved.ok && saved.expires === '2026-11-20', 'the key check records when the GitHub key runs out');
+  assert(!(await other.get()).data().orderHelper, 'only allowed households are checked');
+  await checkWorker(db, async () => new Response('Bad credentials', { status: 401 }), now);
+  assert((await h.get()).data().orderHelper.ok === false, 'a refused key is recorded');
+}
+
+// The evening before delivery: an order arriving tomorrow with things on the list is reminded once.
+{
+  const now = new Date('2026-11-11T18:00:00Z');
+  const placed = await h.collection('orders').add({ state: 'placed', deliveryDate: '2026-11-12', week: '2026-11-01' });
+  await h.collection('orders').add({ state: 'placed', deliveryDate: '2026-11-12', trial: true });
+  await h.collection('list').add({ text: 'Milk', qty: 1, done: false });
+  assert(await remindCutoff(db, now) === 1, 'reminder sent for tomorrow\'s delivery');
+  assert((await placed.get()).data().reminded, 'the order is marked as reminded');
+  assert(await remindCutoff(db, now) === 0, 'and only once');
+}
 
 console.log('Functions OK');
 process.exit(0);

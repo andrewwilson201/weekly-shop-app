@@ -22,6 +22,12 @@ async function signIn(page, name, email) {
   await page.waitForSelector('h1:not(:has-text("Weekly Shop"))', { timeout: 15000 });
 }
 
+// New households can only be made while config/open exists (firestore.rules).
+// The emulator lets the "owner" token write past the rules.
+{
+  const res = await fetch('http://localhost:8081/v1/projects/weekly-shop-177b1/databases/(default)/documents/config?documentId=open', { method: 'POST', headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' }, body: JSON.stringify({ fields: { by: { stringValue: 'e2e' } } }) });
+  if (!res.ok && res.status !== 409) throw new Error(`Couldn't open the emulator for new households: ${res.status}`);
+}
 const browser = await chromium.launch();
 // DARK=1 and WIDE=1 re-run the same flow in dark mode or at desktop width, for screenshots.
 const phone = { viewport: process.env.WIDE ? { width: 1280, height: 900 } : { width: 390, height: 844 }, deviceScaleFactor: 2, colorScheme: process.env.DARK ? 'dark' : 'light' };
@@ -147,9 +153,23 @@ await a.goto(`${BASE}#/week`);
 await a.waitForSelector('.meal.on:has-text("Easy chicken fajitas")');
 assert(true, 'recipe link became a meal, picked for this week');
 await b.click('text=Check it');
-await b.waitForSelector('textarea[name=ingredients]');
-assert(/Olive oil \(cupboard\)/.test(await b.inputValue('textarea[name=ingredients]')), 'cupboard items marked');
-await b.screenshot({ path: `${SHOTS}/05c-imported-meal.png`, fullPage: true });
+await b.waitForSelector('.ing-row');
+assert(await b.$$eval('.ing-row', rows => rows.some(r => /olive oil/i.test(r.querySelector('input[type=text]').value) && r.querySelector('[data-change=ingPantry]').checked)), 'cupboard items marked');
+// The editor: one row per ingredient, with − / + and Add ingredient
+{
+  const n = await b.locator('.ing-row').count();
+  await b.click('button:has-text("Add ingredient")');
+  await b.locator('.ing-row input[data-keep$=":item"]').last().fill('Limes');
+  await b.locator('.ing-row').last().locator('button[aria-label="One more"]').click();
+  await b.waitForSelector('.ing-row:last-child .stepper b:has-text("2")');
+  assert(await b.locator('.ing-row input[data-keep$=":item"]').last().inputValue() === 'Limes', 'typed text survives − / + in the meal editor');
+  await b.locator('.ing-row').last().locator('button[aria-label^="Remove"]').click();
+  await b.waitForFunction(k => document.querySelectorAll('.ing-row').length === k, n);
+  await b.screenshot({ path: `${SHOTS}/05c-meal-editor.png`, fullPage: true });
+  await b.click('button:has-text("Save")');
+  await b.waitForSelector('#mealList');
+  assert(true, 'meal saved from the row editor');
+}
 
 // Claude ideas (CLAUDE_FAKE gives a canned answer, no API call); picks are kept
 await a.goto(`${BASE}#/week`); await a.waitForSelector('.meal');
@@ -191,6 +211,7 @@ await a.goto(`${BASE}#/shop`);
 await a.waitForSelector('text=For the meals');
 assert(await a.isVisible('text=Black beans'), 'imported recipe ingredients are in the shop');
 await a.screenshot({ path: `${SHOTS}/06-shop.png`, fullPage: true });
+assert(await a.locator('.list li.aisle').count() > 1, 'the basket is grouped by aisle');
 // Quantities change with − / + on each line, and things can be added from the Shop screen.
 {
   const row = a.locator('li:has-text("Black beans")').first();
@@ -206,7 +227,7 @@ await a.screenshot({ path: `${SHOTS}/06-shop.png`, fullPage: true });
 // Skip all staples, then put them back, then untick one (which the order records as a skip)
 await a.click('button:has-text("Skip all staples")');
 await a.waitForSelector('button:has-text("Put back")');
-assert(await a.isVisible('text=None this week'), 'skip all staples empties the staples section');
+assert(await a.isVisible('text=None due for this delivery'), 'skip all staples empties the staples section');
 await a.click('button:has-text("Put back")');
 await a.waitForSelector('button:has-text("Skip all staples")');
 await a.click('details[data-toggle=staplesOpen] > summary'); // regulars start folded away
@@ -214,6 +235,12 @@ const firstStaple = await a.locator('details[data-toggle=staplesOpen] .name').fi
 await a.locator('details[data-toggle=staplesOpen] input.check').first().click();
 await sleep(800);
 await a.screenshot({ path: `${SHOTS}/06b-shop-staples.png`, fullPage: true });
+// Who gets the SMS code: Tessa, so her phone is the one told.
+await b.goto(`${BASE}#/settings`);
+await b.selectOption('select[data-change=codeTo]', { label: 'Tessa' });
+await b.waitForSelector('text=Saved');
+await a.goto(`${BASE}#/shop`);
+await a.waitForSelector('button:has-text("Send to Sainsbury")');
 await a.click('button:has-text("Send to Sainsbury")');
 await a.waitForSelector('text=Starting the order helper');
 
@@ -223,6 +250,8 @@ const workerDone = new Promise(r => worker.on('exit', r));
 
 await b.goto(`${BASE}#/order`);
 await b.waitForSelector('input.code', { timeout: 30000 });
+assert(await b.isVisible("text=texted a 6-digit code to Tessa's phone"), 'the code screen says whose phone gets the code');
+assert(await b.isVisible('text=/minutes left to enter it/'), 'the code screen counts down');
 await b.screenshot({ path: `${SHOTS}/07-code.png` });
 await b.fill('input.code', '123456'); await b.click('text=Send code');
 await a.waitForSelector('.slots button', { timeout: 30000 });
@@ -232,6 +261,9 @@ await a.waitForSelector('button:has-text("Approve £")', { timeout: 30000 });
 await a.screenshot({ path: `${SHOTS}/09-review.png`, fullPage: true });
 assert(await a.isVisible('text=not added'), 'unfound item reported');
 assert(!(await a.isVisible('text=organic chicken breast')), 'the full basket starts folded away');
+await a.click('button[data-act=refreshTotal]');
+await a.waitForSelector('button[data-act=refreshTotal]:has-text("Refresh"):not([disabled])', { timeout: 30000 });
+assert(true, 'the total can be read again with Refresh');
 await a.click('summary:has-text("Everything in the basket")');
 assert(await a.isVisible('text=organic chicken breast'), 'meal ingredient uses the usual product (organic chicken)');
 assert(await a.isVisible('li:has-text("black beans") .qty:has-text("×2")') || await a.isVisible('li:has-text("Black beans") .qty:has-text("×2")'), 'the quantity changed on the Shop screen was ordered');
@@ -255,7 +287,7 @@ assert(!(await a.isVisible('text=Olive oil')), 'ordered list items cleared');
 assert(!(await a.isVisible('text=shower gel')), 'list item whose usual was gone was ordered via a search');
 assert(await a.isVisible('text=Something that has nothing'), 'unfound list item kept');
 await a.goto(`${BASE}#/week`); await sleep(800);
-assert(await a.isVisible('text=Ordered'), 'week shows as ordered');
+assert(await a.isVisible('a.notice:has-text("Arriving")'), 'the next shop starts, with the order shown until it arrives');
 await a.screenshot({ path: `${SHOTS}/11-week-after.png`, fullPage: true });
 // Recipes: the ordered dinners, with their methods, until they're cooked
 await a.goto(`${BASE}#/cook`);
@@ -305,18 +337,25 @@ assert(await a.isVisible('text=Would make again'), 'the answer shows under Done 
   await c.goto(BASE);
   await signIn(c, 'Andrew Wilson', 'andrew@example.com');
   await c.goto(`${BASE}#/week`);
-  await c.waitForSelector('text=still to cook from last week', { timeout: 15000 });
+  await c.waitForSelector('text=still to cook from the last shop', { timeout: 15000 });
   await c.screenshot({ path: `${SHOTS}/15-next-week.png`, fullPage: true });
   await c.goto(`${BASE}#/cook`);
-  await c.waitForSelector('h2:has-text("Last week")');
+  await c.waitForSelector('h2:has-text("Shop for")');
   assert(await c.locator('.list li:has(button[data-act=cooked])').count() === toCookCount - 1, 'next week, last week\'s uncooked dinners are still on Recipes');
   await c.screenshot({ path: `${SHOTS}/16-recipes-next-week.png`, fullPage: true });
   await ctx.close();
 }
 
 await a.goto(`${BASE}#/staples`); await sleep(800);
-assert(await a.isVisible(`li:has-text("${firstStaple.replace(/"/g, '')}") >> text=left out 1× running`), 'unticked staple counted as a skip');
-assert(await a.isVisible('summary:has-text("see when")'), 'bought staples log the purchase date');
+assert(await a.locator('#stapleList details[open]').count() === 0, 'only the staples due are open');
+await a.screenshot({ path: `${SHOTS}/05g-staples-short.png`, fullPage: true });
+await a.click('summary:has-text("Not due yet")');
+{
+  const row = a.locator(`li:has-text("${firstStaple.replace(/"/g, '')}")`).first();
+  await row.locator('summary:has-text("More")').click();
+  assert(await row.locator('text=Left out 1× running').isVisible(), 'unticked staple counted as a skip');
+}
+assert(await a.locator('#stapleList .meta:has-text("Bought")').count() > 0, 'bought staples log the purchase date');
 
 // Ideas nobody picked stay out of the meal library, in their own folded list.
 await a.goto(`${BASE}#/meals`);
@@ -351,7 +390,45 @@ await a.waitForSelector('text=Trial run · nothing is paid');
   await a.screenshot({ path: `${SHOTS}/18-trial-done.png`, fullPage: true });
   await w2Done;
   await a.goto(`${BASE}#/week`); await sleep(600);
-  assert(await a.isVisible('.actionbar >> text=Ordered'), 'a trial run doesn\'t replace the real order on This week');
+  assert(await a.isVisible('a.notice:has-text("Arriving")'), 'a trial run doesn\'t replace the real order on Next shop');
+}
+
+// Forgot something: add the list to the placed order (worker/run.mjs amend).
+{
+  await a.goto(`${BASE}#/list`);
+  await a.fill('input[name=text]', 'Bananas'); await a.press('input[name=text]', 'Enter');
+  await a.waitForSelector('text=Bananas');
+  await a.goto(`${BASE}#/week`);
+  await a.click('a.notice:has-text("Arriving")');
+  await a.waitForSelector('button:has-text("Add to this order")');
+  await a.screenshot({ path: `${SHOTS}/19-placed-add.png`, fullPage: true });
+  await a.click('button:has-text("Add to this order")');
+  await a.waitForSelector('text=Adding to the order');
+  const w3 = spawn(process.execPath, ['worker/run.mjs'], { env: { ...process.env, SAINSBURYS_FAKE: '1', CLAUDE_FAKE: '1', SAINSBURYS_EMAIL: 'x', SAINSBURYS_PASSWORD: 'y', FIRESTORE_EMULATOR_HOST: 'localhost:8081', WORKER_MINUTES: '5' }, stdio: 'inherit' });
+  const w3Done = new Promise(r => w3.on('exit', r));
+  await a.waitForSelector('input.code', { timeout: 30000 });
+  await a.fill('input.code', '123456'); await a.click('text=Send code');
+  await a.waitForSelector('button:has-text("Update order")', { timeout: 30000 });
+  assert(await a.isVisible('text=Already in the order'), 'adding to an order shows what is already in it');
+  await a.screenshot({ path: `${SHOTS}/20-amend-review.png`, fullPage: true });
+  await a.click('button:has-text("Update order")');
+  await a.waitForSelector('h3:has-text("Order updated")', { timeout: 30000 });
+  await w3Done;
+  assert(true, 'forgotten items added to a placed order');
+  await a.goto(`${BASE}#/list`); await sleep(800);
+  assert(!(await a.isVisible('text=Bananas')), 'items added to the order leave the list');
+}
+
+// Order history and downloading everything
+await a.goto(`${BASE}#/history`);
+await a.waitForSelector('text=Average shop');
+assert(await a.locator('.list li.link-row').count() === 1, 'order history lists the order once (adding to it isn\'t a second order)');
+await a.screenshot({ path: `${SHOTS}/21-history.png`, fullPage: true });
+await a.goto(`${BASE}#/settings`);
+{
+  const [dl] = await Promise.all([a.waitForEvent('download'), a.click('button[data-act=exportData]')]);
+  const data = JSON.parse(readFileSync(await dl.path(), 'utf8'));
+  assert(data.meals?.length > 5 && data.orders?.length >= 2 && !('devices' in data), 'Download your data gives everything as one file');
 }
 
 // Holiday mode
@@ -364,5 +441,11 @@ await a.waitForSelector('text=Holiday added');
 await a.goto(`${BASE}#/week`); await sleep(600);
 assert(await a.isVisible('text=Holiday mode'), 'away banner shows');
 await a.screenshot({ path: `${SHOTS}/12-holiday.png`, fullPage: true });
+// Nothing on any screen pushes the page sideways on a phone.
+for (const r of ['week', 'shop', 'list', 'cook', 'meals', 'staples', 'settings', 'history', 'order']) {
+  await a.goto(`${BASE}#/${r}`); await sleep(500);
+  const wide = await a.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  assert(process.env.WIDE || wide <= 0, `${r} fits the screen width`);
+}
 await browser.close();
 console.log('All good');

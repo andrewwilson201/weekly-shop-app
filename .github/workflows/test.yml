@@ -1,0 +1,41 @@
+name: Tests
+
+# Runs every test on each pull request (and on main), so a change that breaks
+# the app or the order helper shows up before it's merged:
+#   unit tests (npm test), the Firebase functions against the Firestore
+#   emulator, and the end-to-end run: two people in a browser, the pretend
+#   Sainsbury's shop and a pretend Claude. Nothing here touches the real shop,
+#   the real database or the Claude API, and no secrets are used.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      # The Firestore emulator runs on Java.
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+      - run: node tools/copy-shared.mjs && npm --prefix functions ci
+      - name: Functions and end-to-end, against the emulators
+        run: |
+          python3 -m http.server 8000 >/dev/null 2>&1 &
+          npx -y firebase-tools@15 emulators:exec --only auth,firestore --project weekly-shop-177b1 \
+            'node test/functions-check.mjs && sh test/reset-emulators.sh && node test/e2e.mjs'
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: screenshots, path: test/shots, retention-days: 7 }
