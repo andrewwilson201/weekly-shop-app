@@ -18,6 +18,8 @@ import { onDocumentCreated, onDocumentWritten } from 'firebase-functions/v2/fire
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { defineSecret } from 'firebase-functions/params';
 import { makeJobs } from './shared/worker/jobs.mjs';
+import { isAllowed } from './shared/worker/access.mjs';
+import { checkWorker, remindCutoff } from './tasks.mjs';
 
 initializeApp();
 const db = getFirestore();
@@ -28,60 +30,77 @@ const REPO = 'andrewwilson201/weekly-shop-app';
 // Same region as the Firestore database (London).
 const opts = { region: 'europe-west2', secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 300, memory: '512MiB', maxInstances: 2 };
 
-// The Anthropic SDK reads the key from the environment.
-const withKey = fn => async event => { process.env.ANTHROPIC_API_KEY = ANTHROPIC_API_KEY.value(); return fn(event); };
+// The Anthropic SDK reads the key from the environment. Every trigger first
+// checks the household is one this app is for (worker/access.mjs), so a
+// stranger who signed in can't spend the API key or start orders.
+const guarded = fn => async event => {
+  if (!(await isAllowed(db, event.params.hid))) { console.log('Ignored a household that is not on the access list'); return; }
+  process.env.ANTHROPIC_API_KEY = ANTHROPIC_API_KEY.value();
+  return fn(event);
+};
 const household = hid => db.collection('households').doc(hid).get();
+const github = (path, init = {}) => fetch(`https://api.github.com/repos/${REPO}${path}`, {
+  ...init,
+  headers: { Authorization: `Bearer ${WORKER_GITHUB_TOKEN.value()}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'weekly-shop-app', ...(init.headers || {}) },
+});
 
-export const askClaude = onDocumentWritten({ ...opts, document: 'households/{hid}/weeks/{wid}' }, withKey(async event => {
+export const askClaude = onDocumentWritten({ ...opts, document: 'households/{hid}/weeks/{wid}' }, guarded(async event => {
   const after = event.data?.after;
   if (after?.data()?.ideasRequested !== true || event.data.before?.data()?.ideasRequested === true) return;
   if (!(await jobs.claimIdeas(after.ref))) return;
   await jobs.makeIdeas(await household(event.params.hid), event.params.wid, 'request', Object.keys(after.data().picks || {}));
 }));
 
-export const recipeLink = onDocumentCreated({ ...opts, document: 'households/{hid}/imports/{iid}' }, withKey(async event => {
+export const recipeLink = onDocumentCreated({ ...opts, document: 'households/{hid}/imports/{iid}' }, guarded(async event => {
   const snap = event.data;
   if (snap?.data()?.state !== 'requested' || !(await jobs.claimImport(snap.ref))) return;
   const h = await household(event.params.hid);
   await jobs.processImport({ h, ref: snap.ref, data: snap.data() });
 }));
 
-export const newMeal = onDocumentCreated({ ...opts, document: 'households/{hid}/meals/{mid}' }, withKey(async event => {
+export const newMeal = onDocumentCreated({ ...opts, document: 'households/{hid}/meals/{mid}' }, guarded(async event => {
   if ((event.data?.data()?.ingredients || []).length) return;
   await jobs.fillIngredients(await household(event.params.hid), event.data.ref);
 }));
 
 // "Get the recipe": a meal picked or opened on Recipes with no method saved.
-export const mealRecipe = onDocumentWritten({ ...opts, document: 'households/{hid}/meals/{mid}' }, withKey(async event => {
+export const mealRecipe = onDocumentWritten({ ...opts, document: 'households/{hid}/meals/{mid}' }, guarded(async event => {
   const after = event.data?.after;
   if (after?.data()?.recipeRequested !== true || event.data.before?.data()?.recipeRequested === true) return;
   await jobs.fillRecipe(await household(event.params.hid), after.ref);
 }));
 
 // A new order: start the order worker on GitHub now rather than waiting for
-// its timer. The worker then stays with the order until it's placed.
+// its timer. The worker then stays with the order until it's placed. If this
+// fails, the worker won't start the order late (worker/run.mjs START_MINUTES):
+// the app offers Try again instead.
 export const startOrder = onDocumentCreated({ region: opts.region, document: 'households/{hid}/orders/{oid}', secrets: [WORKER_GITHUB_TOKEN], maxInstances: 2 }, async event => {
   const snap = event.data;
   if (snap?.data()?.state !== 'requested') return;
-  const res = await fetch(`https://api.github.com/repos/${REPO}/actions/workflows/order-worker.yml/dispatches`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${WORKER_GITHUB_TOKEN.value()}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'weekly-shop-app' },
-    body: JSON.stringify({ ref: 'main' }),
-  });
+  if (!(await isAllowed(db, event.params.hid))) {
+    await snap.ref.update({ state: 'cancelled', message: 'This household isn\'t set up for ordering.' });
+    return;
+  }
+  const res = await github('/actions/workflows/order-worker.yml/dispatches', { method: 'POST', body: JSON.stringify({ ref: 'main' }) });
   if (res.ok) await snap.ref.update({ workerStartedAt: new Date() });
   else {
     console.error('Could not start the order worker', res.status, await res.text().catch(() => ''));
-    await snap.ref.update({ message: `The order helper didn't start straight away (GitHub said ${res.status}). It will be picked up on GitHub's next timed run.` });
+    await snap.ref.update({ message: `The order helper didn't start straight away (GitHub said ${res.status}). GitHub's backup timer may still pick it up in the next few minutes; if not, tap Try again.` });
   }
 });
 
-// GitHub switches off a repo's timed workflows after 60 days with no changes,
-// and a switched-off workflow can't be started by startOrder either. Once a
-// week, switch the order worker back on (it does nothing if it's already on).
+// Once a week (Mondays): GitHub switches off a repo's timed workflows after 60
+// days with no changes, and a switched-off workflow can't be started by
+// startOrder either, so switch the order worker back on. Also check the GitHub
+// token still works and when it expires: the result shows in Settings › Order
+// helper, and phones are told when it has stopped working or has 14 days left.
 export const keepWorkerOn = onSchedule({ region: opts.region, schedule: '0 6 * * 1', timeZone: 'Europe/London', secrets: [WORKER_GITHUB_TOKEN], maxInstances: 1 }, async () => {
-  const res = await fetch(`https://api.github.com/repos/${REPO}/actions/workflows/order-worker.yml/enable`, {
-    method: 'PUT',
-    headers: { Authorization: `Bearer ${WORKER_GITHUB_TOKEN.value()}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'weekly-shop-app' },
-  });
-  if (!res.ok) console.error('Could not keep the order worker on', res.status, await res.text().catch(() => ''));
+  await checkWorker(db, github);
+});
+// The evening before a delivery (Sainsbury's lets you change an order until
+// late the night before): if anything is waiting on the shared list, say so,
+// with a link to add it to the order. Runs every evening but only sends when
+// there's an order arriving tomorrow, so there's no fixed shopping day.
+export const cutoffReminder = onSchedule({ region: opts.region, schedule: '0 18 * * *', timeZone: 'Europe/London', maxInstances: 1 }, async () => {
+  await remindCutoff(db);
 });

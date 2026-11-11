@@ -18,7 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      # The worker's own key (database and notifications only) if it's been set up, else the deploy key.
+      WORKER_SERVICE_ACCOUNT: ${{ secrets.WORKER_SERVICE_ACCOUNT }}
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.WORKER_SERVICE_ACCOUNT == '' && secrets.FIREBASE_SERVICE_ACCOUNT || '' }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       SAINSBURYS_EMAIL: ${{ secrets.SAINSBURYS_EMAIL }}
       SAINSBURYS_PASSWORD: ${{ secrets.SAINSBURYS_PASSWORD }}

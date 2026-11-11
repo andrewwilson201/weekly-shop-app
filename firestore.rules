@@ -7,6 +7,12 @@ rules_version = '2';
 // read or write it. Someone joins by opening an invite link, which writes
 // their uid into members along with the household's current invite code.
 // The order worker uses the Admin SDK, which these rules don't apply to.
+//
+// The app is public, so anyone with a Google account can sign in. New
+// households can only be made while a config/open document exists (it doesn't
+// normally; the tests make one), so a stranger who signs in can't do anything.
+// Joining still works with an invite link. config/ itself is admin-only: no
+// rule below matches it, so the app can't read or write it.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -21,6 +27,7 @@ service cloud.firestore {
     match /households/{hid} {
       allow read: if isMember(hid);
       allow create: if signedIn()
+        && exists(/databases/$(database)/documents/config/open)
         && request.resource.data.members == [request.auth.uid]
         && request.resource.data.inviteCode is string && request.resource.data.inviteCode.size() >= 10;
       // Members change anything but can't remove the last member.

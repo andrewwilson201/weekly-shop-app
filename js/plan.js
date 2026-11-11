@@ -23,12 +23,44 @@ export function awayWeek(away = [], wid) {
   return n >= 4;
 }
 
-// The week a plan belongs to is named after the date its calendar week starts
-// (an internal key only; ordering can happen on any day).
+// The calendar week a date is in, named after its Sunday. Plans used to be
+// one per calendar week; older plan ids are these Sundays.
 export function weekId(date = new Date()) {
   const d = toDate(iso(date));
   return iso(d.getTime() - d.getUTCDay() * DAY);
 }
+
+// ---------- Plans ----------
+// A plan is one shop: the dinners, the delivery day and the changes made on
+// the Basket screen. It stays open until it's ordered, then the next one
+// starts, so there's no fixed week (Andrew orders whenever the food runs out).
+// Plans are stored as weeks/{id}: the id is the date the plan was started
+// (older plans: the Sunday of their week), with -2, -3... for a second plan
+// started the same day.
+const planKey = id => { const m = String(id).match(/^(\d{4}-\d{2}-\d{2})(?:-(\d+))?$/); return m ? [m[1], Number(m[2] || 1)] : [String(id), 0]; };
+export function planCmp(a, b) {
+  const [da, na] = planKey(a), [db, nb] = planKey(b);
+  return da < db ? -1 : da > db ? 1 : na - nb;
+}
+// The plan being worked on: the newest one, unless it has been ordered (or
+// put aside with "Start afresh": status 'closed'), in which case a
+// new one (not saved until someone does something with it).
+export function currentPlanId(weeks = {}, today = iso(new Date())) {
+  const ids = Object.keys(weeks).sort(planCmp);
+  const last = ids[ids.length - 1];
+  if (last && !['ordered', 'closed'].includes(weeks[last].status)) return last;
+  return newPlanId(ids, today);
+}
+export function newPlanId(ids = [], today = iso(new Date())) {
+  const last = [...ids].sort(planCmp).pop();
+  const base = last && planKey(last)[0] > today ? planKey(last)[0] : today;
+  for (let n = 1; ; n++) {
+    const id = n === 1 ? base : `${base}-${n}`;
+    if (!ids.includes(id) && (!last || planCmp(id, last) > 0)) return id;
+  }
+}
+// The date a plan was started (for "Started Wed 11 Nov").
+export const planDate = id => planKey(id)[0];
 
 // Learning from the shop: a staple left out of an order is "skipped". Its next
 // due date then counts from that order (skipped_on) instead of the last
@@ -53,18 +85,18 @@ export function stapleStatus(s, delivery) {
 }
 
 // Dinners to cook, for the Recipes screen. Each dinner stays there until
-// someone marks it cooked (or not making it), so last week's are still there
-// after the next week's shop has been ordered. Which weeks count:
-//   this week: its picks, ordered or not yet;
-//   earlier weeks: the dinners of an order that went ahead (any order that
+// someone marks it cooked (or not making it), so the last shop's are still
+// there after the next one has been ordered. Which plans count:
+//   the current plan: its picks, ordered or not yet;
+//   earlier plans: the dinners of an order that went ahead (any order that
 //   wasn't cancelled; a failed one may have been finished in Sainsbury's app).
-//   Earlier weeks with no order at all are left out, since nothing was bought.
-// weeks: { id: week doc }, orders: order docs, current: this week's id.
-// Returns [{ week, mealId, ordered, delivery, done }], oldest week first.
+//   Earlier plans with no order at all are left out, since nothing was bought.
+// weeks: { id: plan doc }, orders: order docs, current: the current plan's id.
+// Returns [{ week, mealId, ordered, delivery, done }], oldest plan first.
 export function toCook({ weeks = {}, orders = [], current }) {
   const out = [];
-  for (const w of Object.values(weeks).sort((a, b) => a.id.localeCompare(b.id))) {
-    if (w.id > current) continue;
+  for (const w of Object.values(weeks).sort((a, b) => planCmp(a.id, b.id))) {
+    if (planCmp(w.id, current) > 0) continue;
     // A trial run (Settings › Order helper) buys nothing, so it doesn't count.
     const mine = orders.filter(o => o.week === w.id && o.state !== 'cancelled' && !o.trial);
     const placed = mine.find(o => o.state === 'placed');
@@ -344,4 +376,47 @@ export function cheapestSwap(ref, others, qty = 1) {
   if (!best || best.cost > refCost * 0.97) return null;
   const saving = Math.round((refCost - best.cost) * refSize * qty * 100) / 100;
   return saving >= 0.1 ? { product: best.p, saving } : null;
+}
+
+// ---------- Aisles ----------
+// The Basket screen groups lines the way the shop is laid out, so it's quick
+// to untick what's already in the cupboard. Worked out from the line's name
+// and the product name; anything unclear goes under "Everything else".
+// Checked in this order, so "frozen peas" is Frozen, "flour tortillas" Bakery
+// and "coconut milk" Food cupboard rather than Dairy.
+export const AISLES = [
+  ['frozen', 'Frozen', /\bfrozen\b|ice cream|ice lolly|fish fingers|oven chips|french fries|hash browns|\bpeas\b(?!.*\b(sugar|snap|mange|split|chick))/],
+  ['household', 'Household & toiletries', /washing|laundry|detergent|fabric (conditioner|softener)|softener|bleach|cleaner|cleaning|wipes|kitchen (towel|roll)|toilet (roll|tissue)|loo roll|tissues|bin (bag|liner)|refuse|foil|cling ?film|baking paper|sandwich bags|freezer bags|sponge|dishwasher|washing up|shampoo|conditioner|shower|body wash|soap|hand wash|toothpaste|toothbrush|deodorant|nappies|nappy|razor|cotton|plasters|batteries|light bulb|lenor|fairy|persil|finish\b/],
+  ['bakery', 'Bakery', /\bbread\b|loaf|bagels?|crumpets|muffins|croissants|pain au|brioche|\brolls?\b|baguette|ciabatta|focaccia|naan|pitta|pita|tortillas?\b(?! chips)|wraps?\b|flatbread|pancakes|scones|hot cross|teacakes/],
+  ['cupboard', 'Food cupboard', /\btins?\b|\btinned\b|\bcans?\b|\bjar\b|chopped tomatoes|plum tomatoes|passata|tomato (puree|purée|paste|ketchup)|ketchup|mayonnaise|mayo\b|mustard|coconut milk|coconut cream|stock|gravy|\boil\b|vinegar|soy sauce|sauce\b|paste\b|pesto|spice|cumin|paprika|turmeric|garam|curry powder|chilli flakes|oregano|cinnamon|dried|\bsalt\b|pepper(corns)?\b(?!s)|\bflour\b|sugar\b|honey|jam\b|marmalade|peanut butter|chocolate spread|cereal|porridge|oats|granola|weetabix|cheerios|pasta\b|spaghetti|penne|rigatoni|fusilli|linguine|tagliatelle|lasagne sheets|orzo|noodles|\brice\b|couscous|quinoa|bulgur|lentils|chickpeas|kidney beans|black beans|baked beans|butter beans|cannellini|tuna\b|sardines|crisps|biscuits|crackers|nuts\b|almonds|cashews|raisins|sultanas|snack|popcorn|stock cubes|baking powder|bicarbonate|yeast|vanilla|cocoa|breadcrumbs|panko|tortilla chips|nachos|gruffalo/],
+  ['drinks', 'Drinks', /juice|robinsons|orange squash|fruit squash|summer fruits squash|cordial|\bwater\b|sparkling|lemonade|cola|coffee|\btea\b|tea bags|beer|lager|cider|wine|prosecco|gin\b|whisky/],
+  ['meat', 'Meat & fish', /chicken|turkey|duck|beef|steak|mince|lamb|pork|sausage|bacon|gammon|ham\b|pancetta|chorizo|salami|prosciutto|meatballs|burger|salmon|\bcod\b|haddock|hake|pollock|tuna steak|mackerel|trout|prawns?|king prawn|scampi|mussels|squid|fish\b|seafood|crab/],
+  ['dairy', 'Dairy, eggs & chilled', /\bmilk\b|cheese|cheddar|mozzarella|parmesan|parmigiano|feta|halloumi|ricotta|mascarpone|paneer|brie|camembert|butter\b|spreadable|margarine|yoghurt|yogurt|fromage|cream\b|creme fraiche|crème fraîche|soured cream|sour cream|custard|\beggs?\b|hummus|houmous|tzatziki|guacamole|dip\b|fresh pasta|gnocchi|tofu|quorn|pastry|pizza\b|coleslaw|cottage|lurpak|kerrygold|actimel|petits filous|babybel|dairylea|cheestrings|frubes/],
+  ['veg', 'Fruit & veg', /apples?|bananas?|oranges?|satsumas?|clementines?|easy peelers|lemons?|limes?|grapes|berries|strawberr|raspberr|blueberr|blackberr|melon|pineapple|mango|kiwi|pears?\b|plums?|peach|nectarine|cherries|avocado|tomato|potato|sweet potato|onions?|shallots?|garlic|ginger|chilli\b|chillies|peppers\b|pepper\b|carrots?|parsnips?|swede|celeriac|leeks?|celery|cucumber|lettuce|salad|spinach|rocket|watercress|kale|cavolo|cabbage|sprouts|broccoli|cauliflower|courgettes?|aubergines?|squash|pumpkin|mushrooms?|sweetcorn|corn on the cob|green beans|runner beans|mange ?tout|sugar ?snap|asparagus|beetroot|radish|spring onions?|herbs|coriander|parsley|basil|mint\b|thyme|rosemary|dill|chives|fruit|veg\b|vegetables/],
+  ['other', 'Everything else', null],
+];
+export function aisleOf(line = {}) {
+  const text = ` ${String(line.name || '')} ${String(line.product || '')} `.toLowerCase();
+  return (AISLES.find(([, , re]) => re && re.test(text)) || AISLES[AISLES.length - 1])[0];
+}
+
+// ---------- Prices ----------
+// Each basket the worker fills is remembered per product (meta/prices,
+// { uid: { p: price each, d: date } }), so the Basket screen can show about
+// what the shop will cost before anything is sent, and the review screen can
+// say what has gone up since last time.
+export function estimateShop(lines = [], prices = {}) {
+  let total = 0, known = 0;
+  for (const l of lines) {
+    const p = l.uid != null ? prices[String(l.uid)]?.p : null;
+    if (p > 0) { total += p * (l.qty || 1); known++; }
+  }
+  return { total: Math.round(total * 100) / 100, known, unknown: lines.length - known };
+}
+// How much more (or less) each one costs than last time, or 0 for a change
+// under 5p (rounding on multi-buys and weighed items).
+export function priceChange(was, now) {
+  if (!(was > 0) || !(now > 0)) return 0;
+  const d = Math.round((now - was) * 100) / 100;
+  return Math.abs(d) >= 0.05 ? d : 0;
 }

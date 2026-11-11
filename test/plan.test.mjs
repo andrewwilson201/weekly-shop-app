@@ -240,3 +240,54 @@ test('a trial order does not count as the week being ordered', () => {
   assert.equal(toCook({ weeks, orders: [{ week: '2026-11-01', state: 'trial_done', trial: true }], current: '2026-11-08' }).length, 0);
   assert.equal(toCook({ weeks, orders: [{ week: '2026-11-01', state: 'placed', meals: ['m1'] }], current: '2026-11-08' }).length, 1);
 });
+
+import { planCmp, currentPlanId, newPlanId, aisleOf, estimateShop, priceChange } from '../js/plan.js';
+
+test('plans are ordered by start date, then by their number', () => {
+  assert.deepEqual(['2026-11-11-2', '2026-11-08', '2026-11-11', '2026-11-11-10'].sort(planCmp), ['2026-11-08', '2026-11-11', '2026-11-11-2', '2026-11-11-10']);
+});
+
+test('the current plan is the newest open one, else a new one', () => {
+  const today = '2026-11-11';
+  assert.equal(currentPlanId({}, today), '2026-11-11', 'no plans: start today');
+  // An old Sunday-week plan not yet ordered carries on.
+  assert.equal(currentPlanId({ '2026-11-08': { status: undefined } }, today), '2026-11-08');
+  // Ordered: a new plan starts today.
+  assert.equal(currentPlanId({ '2026-11-08': { status: 'ordered' } }, today), '2026-11-11');
+  // Ordered twice in one day: the second plan gets -2, then -3.
+  assert.equal(currentPlanId({ '2026-11-11': { status: 'ordered' } }, today), '2026-11-11-2');
+  assert.equal(currentPlanId({ '2026-11-11': { status: 'ordered' }, '2026-11-11-2': { status: 'closed' } }, today), '2026-11-11-3');
+  // "Start afresh" closes a plan the same way.
+  assert.equal(currentPlanId({ '2026-11-10': { status: 'closed' } }, today), '2026-11-11');
+  // A plan dated later than today (a Sunday-week id) is never followed by an earlier one.
+  assert.equal(newPlanId(['2026-11-15'], today), '2026-11-15-2');
+});
+
+test('basket lines are grouped by aisle', () => {
+  const a = name => aisleOf({ name });
+  assert.equal(a('Frozen peas'), 'frozen');
+  assert.equal(a('Coconut milk'), 'cupboard');
+  assert.equal(a('Butternut squash'), 'veg');
+  assert.equal(a('Flour tortillas'), 'bakery');
+  assert.equal(a('Tortilla chips'), 'cupboard');
+  assert.equal(a('Robinsons orange squash'), 'drinks');
+  assert.equal(a('Chicken thighs'), 'meat');
+  assert.equal(a('Greek yoghurt'), 'dairy');
+  assert.equal(a('Toilet roll'), 'household');
+  assert.equal(a('Birthday candles'), 'other');
+  // The product name helps when the line's own name doesn't say.
+  assert.equal(aisleOf({ name: 'Beans', product: "Sainsbury's Baked Beans 4x415g" }), 'cupboard');
+});
+
+test('the basket estimate uses last prices paid', () => {
+  const prices = { 1: { p: 1.5, d: '2026-11-01' }, 2: { p: 2, d: '2026-11-01' } };
+  assert.deepEqual(estimateShop([{ uid: 1, qty: 2 }, { uid: 2 }, { uid: 3 }, { name: 'no uid' }], prices), { total: 5, known: 2, unknown: 2 });
+  assert.deepEqual(estimateShop([], prices), { total: 0, known: 0, unknown: 0 });
+});
+
+test('price changes under 5p are ignored', () => {
+  assert.equal(priceChange(1.5, 1.9), 0.4);
+  assert.equal(priceChange(1.5, 1.2), -0.3);
+  assert.equal(priceChange(1.5, 1.53), 0);
+  assert.equal(priceChange(undefined, 2), 0);
+});

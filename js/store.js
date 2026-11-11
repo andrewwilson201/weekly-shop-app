@@ -6,18 +6,19 @@
 //   invites/{code}                  { hid, name }
 //   households/{hid}                { name, members[], memberNames{uid:name}, inviteCode, store, createdAt }
 //   households/{hid}/meals/{id}     { name, tags[], ingredients[{item, search, qty, uid?}], timesChosen, lastChosen, lastOffered, archived }
-//   households/{hid}/weeks/{weekStart} { offered[mealId], picks{mealId: uid}, deliveryDate, extras{lineKey: bool}, status }
+//   households/{hid}/weeks/{planId}  one shop's plan (js/plan.js currentPlanId): { offered[mealId], picks{mealId: uid}, deliveryDate, extras{lineKey: bool}, qtys, status, cooked }
 //   households/{hid}/list/{id}      { text, qty, addedBy, addedAt, done }
 //   households/{hid}/staples/{id}   { product_uid, name, rule, quantity, every_days, last_bought, dropped }
 //   households/{hid}/imports/{id}   recipe link to read: { url, addToWeek, by, state: requested|done|failed, mealId, name, count, message }
 //   households/{hid}/devices/{id}  phones that get notifications: { token, uid, name, ua, createdAt }
 //   households/{hid}/orders/{id}    order run, driven by worker/run.mjs:
-//        { week, deliveryDate, state, requestedBy, lines[], smsCode, slots[], slotChoice, total, approvedBy, error, log[] }
+//        { week, deliveryDate, state, requestedBy, lines[], smsCode, slots[], slotChoice, total, approvedBy, error, log[], trial?, amend? }
+//   households/{hid}/meta/products  everything bought before; meta/prices  last price paid per product
 
 import {
   initializeApp, getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult,
   signOut as fbSignOut, connectAuthEmulator, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-  doc, getDoc, setDoc, updateDoc, addDoc, deleteDoc, collection, query, orderBy, limit, onSnapshot, serverTimestamp,
+  doc, getDoc, getDocs, setDoc, updateDoc, addDoc, deleteDoc, collection, query, orderBy, limit, onSnapshot, serverTimestamp,
   arrayUnion, deleteField, writeBatch, connectFirestoreEmulator, getMessaging, getToken, deleteToken, messagingSupported,
 } from '../vendor/firebase.js';
 import { FIREBASE_CONFIG, VAPID_KEY } from './config.js';
@@ -33,7 +34,7 @@ if (emulator) {
 
 export { serverTimestamp, deleteField, arrayUnion };
 
-const state = { user: null, profile: null, household: null, meals: [], list: [], staples: [], products: [], weeks: {}, orders: [], imports: [], ready: false };
+const state = { user: null, profile: null, household: null, meals: [], list: [], staples: [], products: [], prices: {}, weeks: {}, orders: [], imports: [], ready: false };
 const listeners = new Set();
 let unsubs = [];
 const emit = () => listeners.forEach(fn => fn(state));
@@ -60,7 +61,7 @@ export async function testSignIn(name, email) {
 getRedirectResult(auth).catch(() => {});
 onAuthStateChanged(auth, async (u) => {
   unsubs.forEach(f => f()); unsubs = [];
-  Object.assign(state, { user: u, profile: null, household: null, meals: [], list: [], staples: [], products: [], weeks: {}, orders: [], imports: [], ready: !u });
+  Object.assign(state, { user: u, profile: null, household: null, meals: [], list: [], staples: [], products: [], prices: {}, weeks: {}, orders: [], imports: [], ready: !u });
   emit();
   if (!u) return;
   unsubs.push(onSnapshot(doc(db, 'shopUsers', u.uid), snap => {
@@ -88,6 +89,10 @@ function watchHousehold(hid) {
   // Everything bought before, for matching typed list items to "your usual".
   unsubs.push(onSnapshot(doc(db, h('meta', 'products')), snap => {
     state.products = snap.exists() ? snap.data().items || [] : []; emit();
+  }, () => {}));
+  // Last price paid per product, for the Basket screen's estimate.
+  unsubs.push(onSnapshot(doc(db, h('meta', 'prices')), snap => {
+    state.prices = snap.exists() ? snap.data().items || {} : {}; emit();
   }, () => {}));
   unsubs.push(onSnapshot(query(collection(db, h('weeks')), orderBy('createdAt', 'desc'), limit(8)), snap => {
     state.weeks = Object.fromEntries(snap.docs.map(d => [d.id, { id: d.id, ...d.data() }])); emit();
@@ -151,6 +156,24 @@ export async function batchH(ops) {
   }
 }
 export const me = () => ({ uid: state.user.uid, name: myName() });
+
+// Every order, not just the 10 kept live (Settings › Order history).
+export async function allOrders() {
+  const snap = await getDocs(query(collection(db, hpath('orders')), orderBy('createdAt', 'desc')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+// Everything the household has, as one JSON file (Settings › Download your data).
+// Phones' notification tokens are left out.
+export async function exportAll() {
+  const plain = v => v && typeof v.toDate === 'function' ? v.toDate().toISOString() : Array.isArray(v) ? v.map(plain) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, plain(x)])) : v;
+  const out = { exportedAt: new Date().toISOString(), household: plain(state.household) };
+  for (const name of ['meals', 'staples', 'list', 'weeks', 'orders', 'imports', 'meta']) {
+    const snap = await getDocs(collection(db, hpath(name)));
+    out[name] = snap.docs.map(d => ({ id: d.id, ...plain(d.data()) }));
+  }
+  return out;
+}
 
 // ---------- phone notifications ----------
 // Web push through Firebase Cloud Messaging. Needs the service worker (sw.js),

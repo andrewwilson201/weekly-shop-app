@@ -168,19 +168,21 @@ export class Sainsburys {
   // Goes trolley → checkout → summary and presses "Place order". Returns { orderNumber, card, total }.
   // If the bank asks for an extra check, throws an error with code 'BANK_CHECK'.
   // dryRun: stop at the summary without pressing Place order (Settings › Order helper › Trial run).
-  async placeOrder(expectedTotal, { dryRun = false } = {}) {
+  // amend: the basket is a placed order being changed, so the last button
+  // confirms the changes instead of placing a new order.
+  async placeOrder(expectedTotal, { dryRun = false, amend = false } = {}) {
     const p = this.page;
     await p.goto(`${SITE}/gol-ui/trolley`, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await p.waitForTimeout(6000);
     await this.dismissCookies();
     for (let i = 0; i < 4 && !/checkout\/summary/.test(p.url()); i++) {
-      const btn = p.getByRole('button', { name: /^(Checkout|Continue to checkout)$/i }).first();
+      const btn = p.getByRole('button', { name: /^(Checkout|Continue to checkout|Checkout changes)$/i }).first();
       await btn.click({ timeout: 20000 });
       await p.waitForTimeout(6000);
     }
     if (!/checkout\/summary/.test(p.url())) throw new Error(`Couldn't reach the checkout summary (stopped at ${p.url()}).`);
     const text = await p.innerText('body');
-    const total = Number((text.match(/Total to pay\s*£([\d.,]+)/i) || [])[1]?.replace(',', ''));
+    const total = Number((text.match(/(?:New total|Total to pay)\s*£([\d.,]+)/i) || [])[1]?.replace(',', ''));
     // Never pay without checking the total: if it can't be read (Sainsbury's
     // changed the page), stop here.
     if (!(total > 0)) throw new Error('Couldn\'t read the total on Sainsbury\'s checkout page, so I didn\'t place the order. Check out in the Sainsbury\'s app.');
@@ -192,11 +194,12 @@ export class Sainsburys {
       const l = r && (r.closest('label') || document.querySelector(`label[for="${r.id}"]`));
       return l ? l.innerText.trim().split('\n')[0] : '';
     }).catch(() => '');
+    const finalButton = p.getByRole('button', { name: amend ? /^(Confirm changes|Update order|Save changes|Place order)$/i : /^Place order$/i }).first();
     if (dryRun) {
-      if (!(await p.getByRole('button', { name: /^Place order$/i }).first().isVisible().catch(() => false))) throw new Error('Reached checkout, but couldn\'t find the Place order button.');
+      if (!(await finalButton.isVisible().catch(() => false))) throw new Error('Reached checkout, but couldn\'t find the Place order button.');
       return { orderNumber: '', card, total, dryRun: true };
     }
-    await p.getByRole('button', { name: /^Place order$/i }).first().click({ timeout: 20000 });
+    await finalButton.click({ timeout: 20000 });
     await p.waitForURL(u => !/checkout\/summary/.test(String(u)), { timeout: 90000 }).catch(() => {});
     await p.waitForTimeout(5000);
     const after = p.url();
@@ -205,9 +208,48 @@ export class Sainsburys {
       const e = new Error('Your bank wants to check the payment. Open the Sainsbury\'s app to finish it.'); e.code = 'BANK_CHECK'; throw e;
     }
     const orderNumber = (body.match(/order (?:number|no\.?)\s*:?\s*#?\s*(\d{8,})/i) || [])[1] || '';
-    if (!/confirmation|order-confirmation|thank/i.test(after + body.slice(0, 2000)) && !orderNumber) {
-      throw new Error(`Not sure the order went through (page: ${after}). Check the Sainsbury's app.`);
+    if (!/confirmation|order-confirmation|thank|updated|changes (have been )?saved/i.test(after + body.slice(0, 2000)) && !orderNumber) {
+      throw new Error(`Not sure the ${amend ? 'change' : 'order'} went through (page: ${after}). Check the Sainsbury's app.`);
     }
     return { orderNumber, card, total };
+  }
+
+  // ---------- Adding to a placed order ----------
+  // Untested against the real site until the first real use (Nov 2026): it
+  // follows the website's own "Amend order" button, and stops with a clear
+  // message whenever a page isn't what it expects. Nothing is confirmed
+  // without the total check above and someone tapping Approve.
+  async startAmend(orderNumber) {
+    const p = this.page;
+    const o = (await this.orders()).find(x => String(x.order_uid) === String(orderNumber));
+    if (!o) throw new Error(`Couldn't find order ${orderNumber} on Sainsbury's.`);
+    if (o.is_amendable === false || o.can_amend === false || /cancel|deliver|complete|picked/i.test(String(o.status || ''))) {
+      throw new Error('Sainsbury\'s says this order can\'t be changed any more (it may be past the cut-off).');
+    }
+    await p.goto(`${SITE}/gol-ui/my-account/orders/${orderNumber}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await p.waitForTimeout(6000);
+    await this.dismissCookies();
+    const amend = p.getByRole('button', { name: /amend|change order|edit order/i }).or(p.getByRole('link', { name: /amend|change order|edit order/i })).first();
+    await amend.click({ timeout: 20000 }).catch(() => { throw new Error('Couldn\'t find the Amend order button on Sainsbury\'s order page. Add the items in the Sainsbury\'s app instead.'); });
+    await p.waitForTimeout(5000);
+    // Some versions ask "Are you sure?"
+    await p.getByRole('button', { name: /^(amend order|yes|continue|confirm|start amending)$/i }).first().click({ timeout: 5000 }).catch(() => {});
+    await p.waitForTimeout(5000);
+    const basket = await this.basket();
+    if (!basket?.items?.length) throw new Error('Opened the order to change it, but Sainsbury\'s basket didn\'t show the order\'s items, so I stopped. Check the Sainsbury\'s app.');
+    const start = o.slot_start_time || o.slot?.start_time || o.delivery_slot?.start_time || null;
+    const end = o.slot_end_time || o.slot?.end_time || o.delivery_slot?.end_time || '';
+    if (!start) throw new Error('Couldn\'t tell the order\'s delivery time from Sainsbury\'s, so I stopped.');
+    return { slotDate: String(start).slice(0, 10), slot: { start_time: start, end_time: end } };
+  }
+  confirmAmend(expectedTotal) { return this.placeOrder(expectedTotal, { amend: true }); }
+  // Leave the order as it was: Sainsbury's "Cancel changes".
+  async cancelAmend() {
+    const p = this.page;
+    await p.goto(`${SITE}/gol-ui/trolley`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await p.waitForTimeout(5000);
+    await p.getByRole('button', { name: /cancel (changes|amend)/i }).first().click({ timeout: 15000 });
+    await p.waitForTimeout(3000);
+    await p.getByRole('button', { name: /^(yes|cancel changes|confirm)/i }).first().click({ timeout: 5000 }).catch(() => {});
   }
 }

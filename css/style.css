@@ -107,7 +107,7 @@ p { margin: 0 0 12px; }
 .sync:not(:empty) + .who { margin-left: 8px; }
 .iconbtn { display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; color: var(--muted); background: none; border: 0; flex: none; }
 .iconbtn:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
-.iconbtn.sm { width: 32px; height: 32px; border-radius: 10px; }
+.iconbtn.sm { width: 40px; height: 40px; border-radius: 12px; }
 .iconbtn.sm svg { width: 18px; height: 18px; }
 
 .avatar { --c: var(--accent); width: 28px; height: 28px; border-radius: 50%; display: inline-grid; place-items: center; font: 700 11.5px/1 var(--sans); letter-spacing: .02em; color: #fff; background: var(--c); border: 2px solid var(--bg); flex: none; }
@@ -185,7 +185,7 @@ a.notice:hover { text-decoration: none; filter: brightness(.98); }
 .btn.danger.solid { background: var(--danger); color: #fff; }
 .btn.block { width: 100%; }
 .btn.lg { min-height: 52px; font-size: 16px; border-radius: 14px; }
-.btn.small { min-height: 34px; padding: 0 12px; font-size: 13.5px; border-radius: 10px; gap: 6px; }
+.btn.small { min-height: 40px; padding: 0 12px; font-size: 13.5px; border-radius: 10px; gap: 6px; }
 .btn.small svg { width: 16px; height: 16px; }
 .btn:disabled { opacity: .45; cursor: default; transform: none; }
 .link { background: none; border: 0; padding: 0; color: var(--accent); font-weight: 600; font-size: 14px; }
@@ -459,14 +459,47 @@ a.chip:hover { text-decoration: none; }
 /* − 2 + steppers: quantities on the Shop screen, servings on a recipe */
 .stepper { display: inline-flex; align-items: center; gap: 2px; flex: none; background: var(--surface-2); border-radius: 99px; padding: 2px; }
 .stepper b { min-width: 22px; text-align: center; font-variant-numeric: tabular-nums; font-size: 15px; }
-.step { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 99px; border: 0; background: none; color: var(--text); padding: 0; cursor: pointer; }
+.step { display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: 99px; border: 0; background: none; color: var(--text); padding: 0; cursor: pointer; }
 .step:hover { background: var(--surface-3); }
-.step svg { width: 16px; height: 16px; }
+.step svg { width: 18px; height: 18px; }
 .chip.serves { gap: 4px; padding: 2px 4px 2px 9px; }
-.chip.serves .step { width: 24px; height: 24px; }
+.chip.serves .step { width: 36px; height: 36px; }
 .chip.serves .step svg { width: 13px; height: 13px; }
 .chip.serves b { min-width: 14px; text-align: center; color: var(--text); }
 /* "Would you make it again?" */
 .verdict { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .verdict .btn svg { width: 16px; height: 16px; }
 .verdict.sm .btn { padding: 6px 9px; }
+
+/* Bigger tap targets (44px) for ticks without making them look bigger. */
+.check { position: relative; }
+.check::before { content: ''; position: absolute; inset: -10px; }
+
+/* Basket: aisle subheadings inside a list */
+.list > li.aisle { min-height: 0; padding: 14px 16px 4px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.list > li.aisle::before, .list > li.aisle + li::before { display: none; }
+
+/* Price rises on the review screen */
+.list .meta.up { color: var(--warm); }
+details.notice { display: block; padding: 0; }
+details.notice > summary { display: flex; gap: 12px; align-items: center; padding: 14px 16px; cursor: pointer; list-style: none; }
+details.notice > summary::-webkit-details-marker { display: none; }
+details.notice .list > li { min-height: 0; padding: 8px 16px; }
+
+/* Meal editor: one row per ingredient */
+div.field { display: flex; flex-direction: column; margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+div.field .hint { font-weight: 400; color: var(--muted); font-size: 13px; margin-top: 2px; }
+.ing-list { margin: 0 -4px; }
+.list > li.ing-row { display: block; padding: 10px 4px; min-height: 0; }
+.list > li.ing-row::before { left: 4px; }
+.ing-row input[type=text] { flex: 1; min-width: 0; }
+.ing-row .ing-more { margin-top: 6px; gap: 6px 14px; }
+.ing-row details.mini { margin-left: auto; }
+.ing-row details.mini > summary { margin-top: 0; }
+.ing-row details.mini[open] { flex: 1 1 100%; margin-left: 0; }
+.ing-row details.mini input { margin-top: 6px; }
+
+/* Settings: the holiday dates wrap on a phone instead of pushing the page sideways */
+.away-form { align-items: flex-end; }
+.away-form label.field { flex: 1 1 140px; min-width: 0; margin: 0; }
+.away-form input[type=date] { width: 100%; min-width: 0; }
