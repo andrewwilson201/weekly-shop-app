@@ -122,7 +122,7 @@ function viewSignIn() {
   return `<div class="signin"><img class="logo" src="icon.svg" alt="">
     <h1>Weekly Shop</h1><p class="lede">Plan the week's dinners together and send one shop to Sainsbury's.</p>
     <ul class="list card features">
-      ${f('sparkle', 'other', 'Meal ideas that learn', 'Ten ideas each Sunday, shaped by what you pick.')}
+      ${f('sparkle', 'other', 'Meal ideas that learn', 'Ten ideas whenever you shop, shaped by what you pick.')}
       ${f('list', 'veg', 'One shared list', 'Add things from either phone. It updates live.')}
       ${f('lock', 'fish', 'You approve every order', 'See the total before anything is paid for.')}
     </ul>
@@ -199,13 +199,13 @@ function viewWeek() {
   const nowAway = awayOn(away, today()) || (awayWeek(away, thisWeekId()) && away.find(a => a.to >= today()));
   const left = stillToCook();
   if (left.length) html += `<a class="notice info" href="#/cook">${icon('book')}<span class="grow"><b>${plural(left.length, 'dinner')} still to cook from ${left.every(x => x.week === addDays(thisWeekId(), -7)) ? 'last week' : 'earlier weeks'}</b><br>${esc(left.map(x => mealById(x.mealId)?.name).filter(Boolean).join(' · '))}</span>${icon('chevron', 'chev')}</a>`;
-  if (nowAway) html += `<div class="notice warn">${icon('plane')}<span class="grow"><b>Holiday mode</b> · away ${fmtDay(nowAway.from)} to ${fmtDay(nowAway.to)}. Sunday ideas are paused for weeks you're away. <a href="#/settings">Change</a></span></div>`;
+  if (nowAway) html += `<div class="notice warn">${icon('plane')}<span class="grow"><b>Holiday mode</b> · away ${fmtDay(nowAway.from)} to ${fmtDay(nowAway.to)}. Delivery days while you're away can't be picked. <a href="#/settings">Change</a></span></div>`;
   if (!st.meals.length) {
     return html + `<div class="card">${empty('bowl', 'No meals yet', 'Load a starter set of family dinners to get going. You can edit them and add your own.', '<button class="btn primary" data-act="loadStarter">Load starter meals</button>')}</div>`;
   }
   if (!w?.offered?.length) {
     if (w?.ideasRequested) return html + `<div class="card">${empty('sparkle', 'Claude is choosing this week\'s ideas', 'They\'ll appear here in a minute or two.', '<span class="spinner" style="display:inline-block"></span>')}</div>`;
-    return html + `<div class="card">${empty('sparkle', 'No ideas yet this week', 'Ideas are made every Sunday morning. You can make them now.',
+    return html + `<div class="card">${empty('sparkle', 'No ideas yet this week', 'Out of food? Get ten dinner ideas and start this shop now.',
       `<div class="row" style="justify-content:center"><button class="btn primary" data-act="askClaude">${icon('sparkle')} Ask Claude for ideas</button><button class="btn" data-act="makeIdeas">Pick from our meals now</button></div>`)}</div>`;
   }
   const picks = w.picks || {};
@@ -686,7 +686,7 @@ function viewMeals() {
   const pickedEver = new Set(Object.values(st.weeks).flatMap(w => Object.keys(w.picks || {})));
   const ideaOnly = m => isIdea(m) && !pickedEver.has(m.id);
   const meals = [...st.meals].filter(m => !m.archived && !ideaOnly(m)).sort((a, b) => (b.timesChosen || 0) - (a.timesChosen || 0) || a.name.localeCompare(b.name));
-  let html = libTabs('meals') + head('Meals', { sub: 'Your dinners. Each Sunday, ideas for the week are picked from these and from Claude.', right: `<a class="btn small tonal" href="#/meal/new">${icon('plus')} New</a>` });
+  let html = libTabs('meals') + head('Meals', { sub: 'Your dinners. Each shop\'s ideas are picked from these and from Claude.', right: `<a class="btn small tonal" href="#/meal/new">${icon('plus')} New</a>` });
   html += `<form class="card" data-form="importLink"><h3 style="display:flex;gap:8px;align-items:center">${icon('link')} Add a recipe from a link</h3>
       <p class="small muted" style="margin:4px 0 12px">Paste a recipe page, or share it to Weekly Shop from your phone. The ingredients are added for you.</p>
       <div class="inputrow"><input type="url" name="url" data-keep="importUrl" placeholder="https://www.bbcgoodfood.com/recipes/…" inputmode="url" autocomplete="off" required aria-label="Recipe link"><button class="btn primary">Add recipe</button></div>
@@ -836,7 +836,7 @@ function viewSettings() {
 
     ${section('Notifications')}
     <div class="card"><div class="row nowrap" style="gap:12px;align-items:flex-start"><span class="tile sm other">${icon('bell')}</span><span class="grow">
-      <b>Notifications on this phone</b><p class="small muted" style="margin:2px 0 0">When Sunday's ideas are ready, when Sainsbury's needs the SMS code, and when the basket is ready to approve. Each person turns it on on their own phone.</p></span></div>
+      <b>Notifications on this phone</b><p class="small muted" style="margin:2px 0 0">When Sainsbury's needs the SMS code, when there are slots to pick, and when the basket is ready to approve. Each person turns it on on their own phone.</p></span></div>
       ${iphoneNotInstalled ? `<div class="notice info" style="margin:12px 0 0">${icon('info')}<span class="grow">On iPhone, add Weekly Shop to your home screen first (Share › Add to Home Screen) and turn this on from there.</span></div>` : ''}
       <div style="margin-top:12px">${S.notificationsOn() ? `<div class="row"><span class="chip ok">${icon('check')} On for this phone</span><span class="spacer"></span><button class="btn small outline" data-act="notifyOff">Turn off</button></div>` : `<button class="btn tonal block" data-act="notifyOn">${icon('bell')} Turn on notifications</button>`}</div></div>
 
@@ -859,7 +859,7 @@ function viewSettings() {
       ${sources().length < 5 ? `<form data-form="addSource" class="row"><input type="text" name="url" required style="flex:2 1 160px" placeholder="bbcgoodfood.com" aria-label="Recipe site address" inputmode="url" autocapitalize="off"><input type="text" name="name" placeholder="Name (optional)" aria-label="Name" style="flex:1 1 120px"><button class="btn primary">Add</button></form>` : ''}</div>
 
     ${section('Holiday mode')}
-    <div class="card"><p class="small muted">Add the dates you're away. Sunday ideas pause for any week you're away for most of, and delivery days in that time can't be picked.</p>
+    <div class="card"><p class="small muted">Add the dates you're away. Delivery days in that time can't be picked.</p>
       ${(h.away || []).filter(a => a.to >= today()).map(a => `<div class="row nowrap" style="margin-bottom:10px;padding:10px 12px;border-radius:12px;background:var(--surface-2)">${icon('plane')}<span class="grow small"><b>${fmtDay(a.from, { weekday: 'short', day: 'numeric', month: 'short' })} – ${fmtDay(a.to, { weekday: 'short', day: 'numeric', month: 'short' })}</b></span><button class="btn small ghost danger" data-act="delAway" data-id="${esc(a.from)}|${esc(a.to)}">Remove</button></div>`).join('')}
       <form data-form="addAway" class="row nowrap"><input type="date" name="from" required aria-label="From"><input type="date" name="to" required aria-label="To"><button class="btn primary">Add</button></form></div>
 

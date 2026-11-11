@@ -11,7 +11,7 @@ test('staple due rule matches build-staples.py', () => {
   assert.equal(stapleStatus({ rule: 'every_week', dropped: true }, '2026-11-10'), 'dropped');
 });
 
-test('weeks are named after their Sunday', () => {
+test('weeks are named after the day they start', () => {
   assert.equal(weekId(new Date('2026-11-06T12:00:00Z')), '2026-11-01');
   assert.equal(weekId(new Date('2026-11-08T12:00:00Z')), '2026-11-08');
 });
@@ -190,7 +190,7 @@ import { scaleLine, scaleQty, scaleFor, servesNumber, isIdea, wouldNot, iso, pic
 test('dates are UK dates: just after midnight in summer it is already the next day', () => {
   assert.equal(iso(new Date('2026-07-01T23:30:00Z')), '2026-07-02');
   assert.equal(iso(new Date('2026-12-01T23:30:00Z')), '2026-12-01');
-  // Sunday 00:30 in summer is a new week in the UK while it's still Saturday in UTC.
+  // 00:30 on the first day of a week in summer is a new week in the UK while it's still Saturday in UTC.
   assert.equal(weekId(new Date('2026-07-04T23:30:00Z')), '2026-07-05');
 });
 

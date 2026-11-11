@@ -17,13 +17,14 @@ export const daysBetween = (a, b) => Math.round((toDate(b) - toDate(a)) / DAY);
 
 // Holiday mode: away = [{ from, to }] (dates, inclusive).
 export const awayOn = (away = [], date) => away.find(a => a.from <= date && date <= a.to) || null;
-// A week's ideas are paused when you're away for most of it (4+ of its 7 days).
-export function awayWeek(away = [], sunday) {
-  let n = 0; for (let i = 0; i < 7; i++) if (awayOn(away, addDays(sunday, i))) n++;
+// Away for most of a week (4+ of its 7 days).
+export function awayWeek(away = [], wid) {
+  let n = 0; for (let i = 0; i < 7; i++) if (awayOn(away, addDays(wid, i))) n++;
   return n >= 4;
 }
 
-// The week a plan belongs to is named after its Sunday (the day ideas go out).
+// The week a plan belongs to is named after the date its calendar week starts
+// (an internal key only; ordering can happen on any day).
 export function weekId(date = new Date()) {
   const d = toDate(iso(date));
   return iso(d.getTime() - d.getUTCDay() * DAY);

@@ -39,20 +39,20 @@ async function claimIdeas(ref) {
 
 // Claude chooses when there's an API key; otherwise (or if it fails) the rules do.
 // keep: meal ids already picked this week, which stay in the list.
-async function makeIdeas(h, sunday, madeBy, keep = []) {
-  try { await makeIdeasInner(h, sunday, madeBy, keep); }
-  catch (e) { await h.ref.collection('weeks').doc(sunday).set({ ideasRequested: FieldValue.delete() }, { merge: true }); throw e; }
+async function makeIdeas(h, wid, madeBy, keep = []) {
+  try { await makeIdeasInner(h, wid, madeBy, keep); }
+  catch (e) { await h.ref.collection('weeks').doc(wid).set({ ideasRequested: FieldValue.delete() }, { merge: true }); throw e; }
 }
-async function makeIdeasInner(h, sunday, madeBy, keep) {
+async function makeIdeasInner(h, wid, madeBy, keep) {
   const meals = (await h.ref.collection('meals').get()).docs.map(d => ({ id: d.id, ...d.data() }));
   if (!meals.length) return;
-  const ref = h.ref.collection('weeks').doc(sunday);
+  const ref = h.ref.collection('weeks').doc(wid);
   let offered = null, reasons = {}, by = 'rules';
   // from: meal id -> recipe site, for the ideas that came from Settings › Recipe sites.
   const from = {};
   const featured = await siteRecipes(h, meals, keep);
   try {
-    const weeks = (await h.ref.collection('weeks').orderBy('createdAt', 'desc').limit(8).get()).docs.map(d => ({ id: d.id, ...d.data() })).filter(w => w.id !== sunday);
+    const weeks = (await h.ref.collection('weeks').orderBy('createdAt', 'desc').limit(8).get()).docs.map(d => ({ id: d.id, ...d.data() })).filter(w => w.id !== wid);
     const skipped = (await h.ref.collection('staples').where('skips', '>', 0).get()).docs.map(d => d.data().name);
     const month = new Date().toLocaleDateString('en-GB', { month: 'long', timeZone: 'Europe/London' });
     const ideas = await claudeIdeas({ meals, weeks, skippedStaples: skipped, notes: h.data().notes || '', month, featured });
@@ -86,9 +86,9 @@ async function makeIdeasInner(h, sunday, madeBy, keep) {
   // A requested refresh keeps the week's picks (the kept meals stay in the list).
   await ref.set({ offered, reasons, from, ...(madeBy === 'request' ? {} : { picks: {}, createdAt: FieldValue.serverTimestamp() }), madeBy, ideasBy: by, ideasRequested: FieldValue.delete() }, { merge: true });
   const b = db.batch();
-  for (const id of offered) b.set(h.ref.collection('meals').doc(id), { lastOffered: sunday }, { merge: true });
+  for (const id of offered) b.set(h.ref.collection('meals').doc(id), { lastOffered: wid }, { merge: true });
   await b.commit();
-  console.log(`Made ${offered.length} ideas for week ${sunday} (${by})`);
+  console.log(`Made ${offered.length} ideas for week ${wid} (${by})`);
 }
 
 // This week's recipes from the household's recipe sites, leaving out ones

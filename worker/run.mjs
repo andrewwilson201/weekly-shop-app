@@ -29,7 +29,7 @@ async function makeShop(opts) {
   const { Sainsburys: Real } = await import('./sainsburys.mjs');
   return new Real(opts);
 }
-import { pickIdeas, weekId, iso, daysBetween, awayWeek, SKIPS_TO_SUGGEST, learnStaple, recordBought, usualCandidates, searchTerms, cheapestSwap } from '../js/plan.js';
+import { pickIdeas, weekId, iso, daysBetween, SKIPS_TO_SUGGEST, learnStaple, recordBought, usualCandidates, searchTerms, cheapestSwap } from '../js/plan.js';
 
 const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
 initializeApp(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: process.env.GCLOUD_PROJECT || 'weekly-shop-177b1' }
@@ -46,19 +46,6 @@ class Cancelled extends Error {}
 async function households() {
   return (await db.collection('households').get()).docs;
 }
-
-// ---------- Sunday ideas ----------
-async function ideas() {
-  const sunday = weekId(new Date());
-  for (const h of await households()) {
-    const ref = h.ref.collection('weeks').doc(sunday);
-    if ((await ref.get()).exists) continue;
-    if (awayWeek(h.data().away, sunday)) { console.log(`Away for week ${sunday}, no ideas`); continue; }
-    await makeIdeas(h, sunday, 'sunday');
-    await notify(h, { title: 'This week\'s meal ideas are ready', body: 'Pick your dinners and a delivery day.', link: '#/week', tag: 'ideas' });
-  }
-}
-
 
 // "Ask Claude for ideas" in the app sets ideasRequested on the week.
 async function requestedIdeas() {
@@ -461,7 +448,6 @@ async function afterPlaced(h, order, lines, delivery) {
 }
 
 async function main() {
-  if (process.argv[2] === 'ideas') return ideas();
   if (process.argv[2] === 'check') {
     // Quick look before the workflow installs a browser.
     const n = (await waitingOrders()).length;
