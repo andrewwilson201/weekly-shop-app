@@ -48,6 +48,15 @@ export class FakeSainsburys {
     if (it.quantity <= 0) this.items.splice(i, 1);
   }
   async orders() { return []; }
+  // Adding to a placed order: the basket opens with the order's items in it.
+  async startAmend(orderNumber) {
+    if (!orderNumber) throw new Error('No order number to change.');
+    this.items.push({ quantity: 1, subtotal_price: 2.5, product: { sku: 'p-in-the-order', name: 'something already in the order' }, promotions: [] });
+    const start = new Date(Date.now() + 864e5); start.setUTCHours(8, 0, 0, 0);
+    return { slotDate: start.toISOString().slice(0, 10), slot: { start_time: start.toISOString().replace('.000', ''), end_time: new Date(start.getTime() + 36e5).toISOString().replace('.000', '') } };
+  }
+  async confirmAmend(expected) { return { orderNumber: '', card: 'Test card ending 0000', total: expected }; }
+  async cancelAmend() {}
   async placeOrder(expected, { dryRun = false } = {}) {
     if (dryRun) return { orderNumber: '', card: 'Test card ending 0000', total: expected, dryRun: true };
     return { orderNumber: '1000000001', card: 'Test card ending 0000', total: expected };

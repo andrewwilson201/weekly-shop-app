@@ -7,7 +7,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { fetchRecipe, recipeFrom } from './recipe.mjs';
 import { claudeIdeas, claudeIngredients, claudeRecipe } from './ideas-claude.mjs';
 import { recentRecipes, recipeSources } from './feeds.mjs';
-import { pickIdeas, weekId, iso } from '../js/plan.js';
+import { pickIdeas, iso, currentPlanId } from '../js/plan.js';
 
 export function makeJobs(db) {
 
@@ -38,7 +38,7 @@ async function claimIdeas(ref) {
 }
 
 // Claude chooses when there's an API key; otherwise (or if it fails) the rules do.
-// keep: meal ids already picked this week, which stay in the list.
+// wid: the plan (weeks/{wid}). keep: meal ids already picked, which stay in the list.
 async function makeIdeas(h, wid, madeBy, keep = []) {
   try { await makeIdeasInner(h, wid, madeBy, keep); }
   catch (e) { await h.ref.collection('weeks').doc(wid).set({ ideasRequested: FieldValue.delete() }, { merge: true }); throw e; }
@@ -70,6 +70,8 @@ async function makeIdeasInner(h, wid, madeBy, keep) {
         }
         if (!offered.includes(id)) offered.push(id);
         if (i.reason) reasons[id] = i.reason;
+        // How long it takes, for the idea cards (a recipe's own time wins).
+        if (i.time && !i.meal) { const m = meals.find(x => x.id === id); if (m && !m.time && !m.recipe?.time) b.set(h.ref.collection('meals').doc(id), { time: i.time }, { merge: true }); }
         if (i.from) from[id] = i.from;
       }
       await b.commit();
@@ -150,7 +152,9 @@ async function processImport({ h, ref, data }) {
     const meal = h.ref.collection('meals').doc();
     await meal.set({ name: r.name || 'Recipe from a link', ingredients: r.ingredients, source: data.url, image: r.image || null, servings: r.servings || null, ...(r.recipe ? { recipe: r.recipe } : {}), timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: data.by || null });
     if (data.addToWeek) {
-      const week = h.ref.collection('weeks').doc(weekId(new Date()));
+      // The plan being worked on (the newest one not yet ordered), as the app works it out.
+      const weeks = Object.fromEntries((await h.ref.collection('weeks').orderBy('createdAt', 'desc').limit(8).get()).docs.map(d => [d.id, d.data()]));
+      const week = h.ref.collection('weeks').doc(currentPlanId(weeks, iso(new Date())));
       const update = { offered: FieldValue.arrayUnion(meal.id), createdAt: FieldValue.serverTimestamp() };
       if (data.by?.uid) update.picks = { [meal.id]: data.by };
       // Keep an existing week's createdAt.

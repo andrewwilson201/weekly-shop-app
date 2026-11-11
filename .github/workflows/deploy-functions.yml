@@ -1,7 +1,8 @@
 name: Deploy functions
 
 # Redeploys the Firebase functions (Ask Claude for ideas, recipe links,
-# missing ingredients, starting orders) whenever code they use
+# missing ingredients, starting orders, the weekly key check and the
+# cut-off reminder) whenever code they use
 # changes on main. The FIREBASE_SERVICE_ACCOUNT key needs the extra roles in
 # the README (One-time setup › Functions deploy).
 on:
@@ -14,6 +15,7 @@ on:
       - worker/recipe.mjs
       - worker/feeds.mjs
       - worker/notify.mjs
+      - worker/access.mjs
       - js/plan.js
       - tools/copy-shared.mjs
       - firebase.json

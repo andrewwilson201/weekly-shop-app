@@ -48,12 +48,13 @@ const SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['existing_id', 'recipe_url', 'name', 'reason', 'protein', 'cuisine', 'tags', 'ingredients'],
+        required: ['existing_id', 'recipe_url', 'name', 'reason', 'time', 'protein', 'cuisine', 'tags', 'ingredients'],
         properties: {
           existing_id: { type: 'string', description: 'id of a meal from the library, or "" for a new dish' },
           recipe_url: { type: 'string', description: 'For a recipe from the "New on their recipe sites" list: its url, exactly as given. Otherwise ""' },
           name: { type: 'string' },
           reason: { type: 'string', description: 'One short sentence for the family on why this is suggested this week' },
+          time: { type: 'string', description: 'About how long it takes to make, start to finish, e.g. "25 min" or "1 hr 15 min"' },
           protein: { type: 'string', enum: PROTEINS, description: 'The main protein' },
           cuisine: { type: 'string', description: 'e.g. Italian, Indian, Mexican, British, Chinese, Thai, Middle Eastern, Greek, Japanese, Spanish' },
           tags: { type: 'array', items: { type: 'string' } },
@@ -96,6 +97,10 @@ Cook with the season (the message gives the month and what's in season in the UK
 - Lean, don't exclude. Most of the 10 should suit the season, but always keep 1 or 2 that go against it, such as a hearty warm salad or grain bowl in winter, or a light stew, curry or soup in summer. Never drop salads entirely in winter or stews entirely in summer.
 - Library favourites can be offered at any time of year; just don't let out-of-season dishes take over.
 
+Use up what gets bought. A recipe that needs half a pot of soured cream, a bunch of coriander, a bag of spinach or half a tin of coconut milk leaves the rest to go off. Where you can, pair dishes so a fresh ingredient bought for one is used up by another among the 10 (for example fajitas and a curry that both use coriander and soured cream or yoghurt), and say so in the reason ("uses the rest of the coriander from the fajitas"). Don't force it at the cost of variety.
+
+Give each idea a realistic total time (prep and cooking) so the family can pick quick ones for busy nights.
+
 For every new dish, list the ingredients to buy for that dinner for the whole household, as Sainsbury's shop items. Mark store-cupboard basics as pantry.
 
 When the message lists recipes newly published on the family's chosen recipe sites, include exactly one from each site (the one that best suits this family and the season) as a new dish, with recipe_url set to its url and the name as published. These count towards the new dishes and the variety rules; list their ingredients as for any new dish.
@@ -125,7 +130,7 @@ export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '
     `Household notes: ${notes || 'none given'}`,
     seasonNote(month),
     `Meal library (JSON):\n${JSON.stringify(library)}`,
-    `Recent weeks, newest first (JSON):\n${JSON.stringify(history)}`,
+    `Recent shops, newest first (JSON):\n${JSON.stringify(history)}`,
     offeredRecently.length ? `Offered in the last 3 weeks: ${offeredRecently.join('; ')}` : '',
     featured.length ? `New on their recipe sites in the last week (JSON):\n${JSON.stringify(featured.map(f => ({ site: f.source, title: f.title, url: f.url, published: f.published?.slice(0, 10), summary: f.summary })))}` : '',
     skippedStaples.length ? `Regular items they've been leaving out of the shop lately: ${skippedStaples.join(', ')}` : '',
@@ -160,16 +165,16 @@ export function validate(ideas, byId, featured = []) {
     if (i.existing_id && byId.has(i.existing_id)) {
       // Never a dinner they said they wouldn't make again.
       if (seen.has(i.existing_id) || wouldNot(byId.get(i.existing_id))) continue;
-      seen.add(i.existing_id); out.push({ id: i.existing_id, reason: i.reason });
+      seen.add(i.existing_id); out.push({ id: i.existing_id, reason: i.reason, ...(i.time ? { time: i.time } : {}) });
     } else if (!i.existing_id && i.name && i.ingredients?.length) {
       const dup = [...byId.values()].find(m => m.name.toLowerCase() === i.name.toLowerCase());
-      if (dup) { if (!seen.has(dup.id) && !wouldNot(dup)) { seen.add(dup.id); out.push({ id: dup.id, reason: i.reason }); } }
+      if (dup) { if (!seen.has(dup.id) && !wouldNot(dup)) { seen.add(dup.id); out.push({ id: dup.id, reason: i.reason, ...(i.time ? { time: i.time } : {}) }); } }
       else {
         const f = feedUrls.get(i.recipe_url);
         // A recipe from a site already in the library (an earlier week) is offered again rather than added twice.
         const known = f && [...byId.values()].find(m => m.source === f.url);
         if (known) { if (!seen.has(known.id)) { seen.add(known.id); out.push({ id: known.id, reason: i.reason, from: f.source }); } }
-        else out.push({ ...(f ? { from: f.source } : {}), meal: { name: i.name, ...(f ? { source: f.url } : {}), tags: i.tags || [], ...(i.cuisine ? { cuisine: i.cuisine } : {}), ...(i.protein ? { protein: i.protein } : {}), ingredients: i.ingredients.map(g => ({ item: g.item, qty: Math.max(1, g.qty || 1), search: g.search || g.item, ...(g.pantry ? { pantry: true } : {}) })) }, reason: i.reason });
+        else out.push({ ...(f ? { from: f.source } : {}), meal: { name: i.name, ...(f ? { source: f.url } : {}), ...(i.time ? { time: i.time } : {}), tags: i.tags || [], ...(i.cuisine ? { cuisine: i.cuisine } : {}), ...(i.protein ? { protein: i.protein } : {}), ingredients: i.ingredients.map(g => ({ item: g.item, qty: Math.max(1, g.qty || 1), search: g.search || g.item, ...(g.pantry ? { pantry: true } : {}) })) }, reason: i.reason });
       }
     }
     if (p && out.length > before) { perProtein[p] = (perProtein[p] || 0) + 1; out[out.length - 1].protein = p; }
@@ -180,8 +185,8 @@ export function validate(ideas, byId, featured = []) {
 
 function fakeIdeas(meals, featured = []) {
   const byId = new Map(meals.map(m => [m.id, m]));
-  const ideas = meals.slice(0, 8).map(m => ({ existing_id: m.id, name: m.name, reason: `Because you liked ${m.name.split(' ')[0].toLowerCase()} dishes`, tags: [], ingredients: [] }));
-  ideas.push({ existing_id: '', name: 'Pretend new dish: lemon chicken orzo', reason: 'Something new, like your traybakes', tags: ['chicken'],
+  const ideas = meals.slice(0, 8).map((m, i) => ({ existing_id: m.id, name: m.name, reason: `Because you liked ${m.name.split(' ')[0].toLowerCase()} dishes`, time: `${25 + 5 * i} min`, tags: [], ingredients: [] }));
+  ideas.push({ existing_id: '', name: 'Pretend new dish: lemon chicken orzo', reason: 'Something new, like your traybakes', time: '35 min', tags: ['chicken'],
     ingredients: [{ item: 'Orzo', qty: 1, search: 'sainsburys orzo', pantry: false }, { item: 'Chicken thighs', qty: 1, search: 'sainsburys chicken thighs', pantry: false }, { item: 'Olive oil', qty: 1, search: 'olive oil', pantry: true }] });
   for (const f of [...new Map(featured.map(f => [f.source, f])).values()]) ideas.unshift({ existing_id: '', recipe_url: f.url, name: f.title, reason: `New on ${f.source} this week`, protein: 'vegetarian', tags: [],
     ingredients: [{ item: 'Butternut squash', qty: 1, search: 'sainsburys butternut squash', pantry: false }] });

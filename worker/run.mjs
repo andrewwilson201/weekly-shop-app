@@ -6,11 +6,15 @@
 //   any step → failed | cancelled (app writes cancelRequested) | needs_you
 //   A trial order (trial: true, from Settings) goes to Sainsbury's checkout
 //   but stops before Place order → trial_done, then empties what it added.
-//   A run that stops part way is never restarted (see the claim below).
+//   An amend order (amend: { orderNumber, of }, from "Add to this order") opens
+//   a placed order on Sainsbury's instead of booking a slot, adds to it, and
+//   confirms the change after approval.
+//   A run that stops part way is never restarted (see the claim below), and an
+//   order nobody picked up within START_MINUTES is never started.
 //
 // Usage:  xvfb-run -a node worker/run.mjs            process waiting orders, then exit
-//         node worker/run.mjs ideas                  make this week's 10 meal ideas if missing
-// Env:    FIREBASE_SERVICE_ACCOUNT (JSON) or GOOGLE_APPLICATION_CREDENTIALS,
+//         node worker/run.mjs check                  recipe links, ideas and methods; says if orders are waiting
+// Env:    WORKER_SERVICE_ACCOUNT or FIREBASE_SERVICE_ACCOUNT (JSON) or GOOGLE_APPLICATION_CREDENTIALS,
 //         SAINSBURYS_EMAIL, SAINSBURYS_PASSWORD, WORKER_MINUTES (default 50)
 
 import { initializeApp, cert, applicationDefault } from 'firebase-admin/app';
@@ -20,6 +24,7 @@ import { FakeSainsburys } from './fake.mjs';
 import { makeJobs } from './jobs.mjs';
 import { notify } from './notify.mjs';
 import { claudeUsual, claudeSwaps } from './ideas-claude.mjs';
+import { households as allowedHouseholdDocs } from './access.mjs';
 
 // SAINSBURYS_FAKE=1 swaps in a pretend shop, for testing the app end to end.
 // The real one loads Playwright, so it's imported only when needed.
@@ -29,9 +34,10 @@ async function makeShop(opts) {
   const { Sainsburys: Real } = await import('./sainsburys.mjs');
   return new Real(opts);
 }
-import { pickIdeas, weekId, iso, daysBetween, SKIPS_TO_SUGGEST, learnStaple, recordBought, usualCandidates, searchTerms, cheapestSwap } from '../js/plan.js';
+import { iso, daysBetween, SKIPS_TO_SUGGEST, learnStaple, recordBought, usualCandidates, searchTerms, cheapestSwap, priceChange } from '../js/plan.js';
 
-const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
+// The worker's own key if it has one (database and notifications only), else the deploy key.
+const sa = process.env.WORKER_SERVICE_ACCOUNT || process.env.FIREBASE_SERVICE_ACCOUNT;
 initializeApp(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: process.env.GCLOUD_PROJECT || 'weekly-shop-177b1' }
   : { credential: sa ? cert(JSON.parse(sa)) : applicationDefault() });
 const db = getFirestore();
@@ -39,13 +45,17 @@ const { makeIdeas, processImport, claimImport, claimIdeas, fillIngredients, fill
 
 const DEADLINE = Date.now() + (Number(process.env.WORKER_MINUTES) || 50) * 60000;
 const ACTIVE = ['requested', 'logging_in', 'need_code', 'choose_slot', 'filling', 'review', 'placing'];
+// An order the worker hasn't picked up within this long is never started: the
+// instant start failed and GitHub's backup timer can be hours late, and nobody
+// wants an SMS code at 3am for an order they gave up on. The app offers "Try again".
+export const START_MINUTES = 15;
+const CODE_MINUTES = 10;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 class Cancelled extends Error {}
 
-async function households() {
-  return (await db.collection('households').get()).docs;
-}
+// Only the household(s) this app is for (worker/access.mjs).
+const households = () => allowedHouseholdDocs(db);
 
 // "Ask Claude for ideas" in the app sets ideasRequested on the week.
 async function requestedIdeas() {
@@ -114,6 +124,11 @@ async function processOrder({ h, ref }) {
   // Claim it so a second worker run doesn't pick it up too.
   const claimed = await db.runTransaction(async t => {
     const d = (await t.get(ref)).data();
+    const age = d.createdAt ? (Date.now() - d.createdAt.toMillis()) / 60000 : 0;
+    if (d.state === 'requested' && age > START_MINUTES) {
+      t.update(ref, { state: 'cancelled', message: `The order helper didn't start within ${START_MINUTES} minutes, so it wasn't started late. Nothing happened on Sainsbury's. Tap Try again to send it now.`, notStarted: true });
+      return false;
+    }
     if (d.state !== 'requested') {
       // Another run is working on it (it updates workerAt every minute).
       if (d.workerAt && Date.now() - d.workerAt.toMillis() < 5 * 60000) return false;
@@ -133,20 +148,33 @@ async function processOrder({ h, ref }) {
   const heartbeat = setInterval(() => ref.update({ workerAt: FieldValue.serverTimestamp() }).catch(() => {}), 60000);
 
   const shop = await makeShop({ store: h.data().store || '0031', log: m => log(m) });
-  let reserved = false, slotDate = null;
+  let reserved = false, slotDate = null, amending = false, placedDone = false;
   try {
     if (order.cancelRequested) throw new Cancelled();
     await shop.open();
     await log('Logging in to Sainsbury\'s');
     await shop.login(process.env.SAINSBURYS_EMAIL, process.env.SAINSBURYS_PASSWORD, async () => {
-      await update({ state: 'need_code', smsCode: FieldValue.delete() });
-      await notify(h, { title: 'Sainsbury\'s needs the SMS code', body: 'Type the 6-digit code from your text into the app.', link: '#/order', tag: 'order' });
-      const code = await waitFor(d => d.smsCode, 10);
-      if (!code) throw new Error('No SMS code came in within 10 minutes.');
+      await update({ state: 'need_code', smsCode: FieldValue.delete(), codeAt: FieldValue.serverTimestamp() });
+      // The code goes to one phone (Settings › Household › SMS code goes to), so ask that person.
+      const codeTo = h.data().codeTo || null;
+      await notify(h, { title: 'Sainsbury\'s needs the SMS code', body: `Type the 6-digit code from your text into the app. It's needed within ${CODE_MINUTES} minutes.`, link: '#/order', tag: 'order', to: codeTo });
+      const code = await waitFor(d => d.smsCode, CODE_MINUTES);
+      if (!code) throw new Error(`No SMS code came in within ${CODE_MINUTES} minutes.`);
       await update({ smsCode: FieldValue.delete(), state: 'logging_in' });
       return code;
     });
 
+    // Adding to a placed order: open it on Sainsbury's (its slot stays as it is).
+    let res = null, choice = null;
+    if (order.amend) {
+      await log(`Opening order ${order.amend.orderNumber} to add to it`);
+      await update({ state: 'filling' });
+      const opened = await shop.startAmend(order.amend.orderNumber);
+      amending = true;
+      res = { slot: opened.slot, reserved_until: new Date(Date.now() + 100 * 60000).toISOString() };
+      slotDate = opened.slotDate;
+      await update({ slot: opened.slot ? { start_time: opened.slot.start_time, end_time: opened.slot.end_time || '' } : null });
+    } else {
     // Slots: the chosen day and the day either side. If Sainsbury's says the
     // picked one has gone, the list is refreshed and offered again (3 tries).
     const day = order.deliveryDate;
@@ -154,7 +182,7 @@ async function processOrder({ h, ref }) {
       .filter(s => Math.abs(daysBetween(day, s.start_time.slice(0, 10))) <= 1 && !skip.has(s.start_time))
       .map(s => ({ start_time: s.start_time, end_time: s.end_time, price: s.price, is_green: !!s.is_green, date: londonDate(s.start_time), booking_key: s.booking_key }));
     const gone = new Set();
-    let near = await nearSlots(), res = null, choice = null;
+    let near = await nearSlots();
     for (let attempt = 1; !res; attempt++) {
       await update({ state: 'choose_slot', slots: near.map(({ booking_key, ...s }) => s), slotChoice: FieldValue.delete(), ...(attempt > 1 ? { message: 'Sainsbury\'s says that slot has just gone. Pick another one.' } : {}) });
       await log(`${near.length} free slots around ${day}`);
@@ -177,11 +205,12 @@ async function processOrder({ h, ref }) {
     reserved = true;
     await update({ state: 'filling', slot: { start_time: res.slot.start_time, end_time: res.slot.end_time, reserved_until: res.reserved_until } });
     await log(`Booked ${choice}`);
+    slotDate = res.slot.start_time.slice(0, 10);
+    }
 
     // Basket
-    slotDate = res.slot.start_time.slice(0, 10);
-    const before = await shop.basket();
-    if (before?.items?.length) await log(`The basket already had ${before.items.length} items; they're kept`);
+    const before = await shop.basket(slotDate);
+    if (before?.items?.length) await log(order.amend ? `The order has ${before.items.length} items so far` : `The basket already had ${before.items.length} items; they're kept`);
     const lines = (await read()).lines || [];
     await pickUsual(h, lines, log);
     await pickCheaper(h, lines, shop, log);
@@ -217,25 +246,38 @@ async function processOrder({ h, ref }) {
         line.result = e.status === 400 ? 'unavailable' : `error ${e.status || e.message}`;
       }
     }
+    // Prices from earlier baskets, to say what's gone up (and remembered for the Basket screen's estimate).
+    const pricesRef = h.ref.collection('meta').doc('prices');
+    const pastPrices = (await pricesRef.get()).data()?.items || {};
     const readBasket = async () => {
       const b = await shop.basket(slotDate);
-      const items = (b.items || []).map(i => ({ uid: i.product?.sku, name: i.product?.name, qty: i.quantity, total: Number(i.subtotal_price), offer: (i.promotions || [])[0]?.strap_line || '' }));
+      const items = (b.items || []).map(i => {
+        const uid = i.product?.sku, qty = Number(i.quantity) || 1, total = Number(i.subtotal_price);
+        const up = priceChange(pastPrices[String(uid)]?.p, total / qty);
+        return { uid, name: i.product?.name, qty, total, offer: (i.promotions || [])[0]?.strap_line || '', ...(up ? { change: up } : {}) };
+      });
       return { b, basket: { items, subtotal: Number(b.subtotal_price), savings: Number(b.savings || 0), delivery: Number(b.slot_price ?? (b.total_price - b.subtotal_price)), minimum: b.minimum_spend }, total: Number(b.total_price) };
+    };
+    const rememberPrices = async items => {
+      const today = iso(new Date());
+      const now = Object.fromEntries(items.filter(i => i.uid != null && i.total > 0).map(i => [String(i.uid), { p: Math.round(i.total / (i.qty || 1) * 100) / 100, d: today }]));
+      await pricesRef.set({ items: now }, { merge: true }).catch(e => console.log(`Prices not saved: ${e.message}`));
     };
     let { b, basket, total } = await readBasket();
     const added = lines.filter(l => l.result === 'added').length;
     await log(`Added ${added} of ${lines.length} lines, total £${total.toFixed(2)}`);
+    await rememberPrices(basket.items);
     if (b.has_exceeded_minimum_spend === false) {
       if (order.trial) throw new Error(`Trial: the basket came to under Sainsbury's £${b.minimum_spend} minimum, so checkout couldn't be tried.`);
       await update({ state: 'needs_you', lines, basket, total, message: `The basket is under Sainsbury's £${b.minimum_spend} minimum, so it can't be ordered yet. Add more in the Sainsbury's app, or cancel.` });
-      reserved = false; // leave the slot for them to use
+      reserved = false; amending = false; // leave the slot (or the changes) for them to finish in the app
       return;
     }
     // Only an approval given for this basket counts.
     await update({ state: 'review', lines, basket, total, approvedBy: FieldValue.delete(), approvedTotal: FieldValue.delete() });
     await notify(h, order.trial
       ? { title: `Trial basket ready: £${Number(total).toFixed(2)}`, body: 'Check it, then tap Check out (trial). Nothing is paid.', link: '#/order', tag: 'order' }
-      : { title: `Basket ready: £${Number(total).toFixed(2)}`, body: 'Check it and tap Approve to place the order.', link: '#/order', tag: 'order' });
+      : { title: order.amend ? `Changed order ready: £${Number(total).toFixed(2)}` : `Basket ready: £${Number(total).toFixed(2)}`, body: order.amend ? 'Check it and tap Approve to update the order.' : 'Check it and tap Approve to place the order.', link: '#/order', tag: 'order' });
 
     // Approval (the slot is held for about 2 hours)
     const holdMins = Math.max(5, (new Date(res.reserved_until) - Date.now()) / 60000 - 5);
@@ -260,7 +302,27 @@ async function processOrder({ h, ref }) {
       await update({ lines, basket, total });
       return true;
     };
+    // "Refresh the total" (after changing things in the Sainsbury's app) and
+    // "Remove" on things that were already in the basket.
+    let refreshed = order.refreshAsked || 0;
+    const removed = new Set();
+    const refresh = async d => {
+      const gone = (d.removeExtras || []).filter(u => !removed.has(String(u)));
+      if (!gone.length && !(d.refreshAsked && d.refreshAsked !== refreshed)) return false;
+      for (const u of gone) {
+        removed.add(String(u));
+        const item = basket.items.find(i => String(i.uid) === String(u));
+        try { await shop.remove(u, item?.qty || 999, slotDate); await log(`Took ${item?.name || 'an item'} out of the basket`); }
+        catch (e) { await log(`Couldn't take ${item?.name || 'an item'} out: ${e.message}`); }
+      }
+      refreshed = d.refreshAsked || refreshed;
+      ({ basket, total } = await readBasket());
+      await update({ basket, total, refreshedAt: FieldValue.serverTimestamp() });
+      return true;
+    };
     const ok = await waitFor(async d => {
+      const changed = await refresh(d);
+      if (changed && d.approvedBy && Math.abs((d.approvedTotal || 0) - total) > 0.005) { await update({ approvedBy: FieldValue.delete(), approvedTotal: FieldValue.delete() }); return null; }
       if (await undoSwaps({ undoSwaps: (d.undoSwaps || []).filter(k => !lines.find(l => l.key === k)?.swap?.failed) })) {
         // An approval of the old total doesn't count for the new one.
         if (d.approvedBy && Math.abs((d.approvedTotal || 0) - total) > 0.005) { await update({ approvedBy: FieldValue.delete(), approvedTotal: FieldValue.delete() }); return null; }
@@ -271,8 +333,8 @@ async function processOrder({ h, ref }) {
     }, Math.min(holdMins, 100));
     if (!ok) {
       if (order.trial) throw new Error('Trial: nobody tapped Check out in time.');
-      await update({ state: 'needs_you', message: 'Nobody approved the order in time. The basket and slot are still in your Sainsbury\'s account: check out in the Sainsbury\'s app, or start again here.' });
-      reserved = false;
+      await update({ state: 'needs_you', message: order.amend ? 'Nobody approved the change in time. The items are still in your Sainsbury\'s basket: confirm or cancel the changes in the Sainsbury\'s app.' : 'Nobody approved the order in time. The basket and slot are still in your Sainsbury\'s account: check out in the Sainsbury\'s app, or start again here.' });
+      reserved = false; amending = false;
       return;
     }
     if (order.trial) {
@@ -293,23 +355,41 @@ async function processOrder({ h, ref }) {
       return;
     }
     await update({ state: 'placing' });
-    await log(`Approved by ${ok.name}, placing the order`);
-    const placed = await shop.placeOrder(total);
-    reserved = false;
-    let orderNumber = placed.orderNumber;
-    const recent = await shop.orders().catch(() => []);
-    const match = recent.find(o => String(o.slot_start_time || '').startsWith(res.slot.start_time.slice(0, 16)) || (orderNumber && String(o.order_uid) === orderNumber));
-    if (match) orderNumber = orderNumber || String(match.order_uid);
+    await log(`Approved by ${ok.name}, ${order.amend ? 'confirming the change' : 'placing the order'}`);
+    const placed = order.amend ? await shop.confirmAmend(total) : await shop.placeOrder(total);
+    reserved = false; amending = false;
+    let orderNumber = placed.orderNumber || order.amend?.orderNumber || '';
+    if (!order.amend) {
+      const recent = await shop.orders().catch(() => []);
+      const match = recent.find(o => String(o.slot_start_time || '').startsWith(res.slot.start_time.slice(0, 16)) || (orderNumber && String(o.order_uid) === orderNumber));
+      if (match) orderNumber = orderNumber || String(match.order_uid);
+    }
+    // From here the order has gone through: nothing below may mark it as stopped.
+    placedDone = true;
+    const when = res.slot?.start_time ? new Date(res.slot.start_time).toLocaleString('en-GB', { weekday: 'long', hour: 'numeric', minute: '2-digit', timeZone: 'Europe/London' }) : '';
     await update({ state: 'placed', orderNumber, card: placed.card || '', total: placed.total || total, placedAt: FieldValue.serverTimestamp() });
-    await log(`Order placed${orderNumber ? ` (#${orderNumber})` : ''}`);
-    await notify(h, { title: 'Order placed', body: `£${Number(placed.total || total).toFixed(2)}, delivery ${new Date(res.slot.start_time).toLocaleString('en-GB', { weekday: 'long', hour: 'numeric', minute: '2-digit', timeZone: 'Europe/London' })}.`, link: '#/order', tag: 'order' });
-    await afterPlaced(h, order, lines, res.slot.start_time.slice(0, 10));
+    await log(order.amend ? `Order ${orderNumber} updated` : `Order placed${orderNumber ? ` (#${orderNumber})` : ''}`);
+    await notify(h, order.amend
+      ? { title: 'Order updated', body: `Now £${Number(placed.total || total).toFixed(2)}${when ? `, delivery ${when}` : ''}.`, link: '#/order', tag: 'order' }
+      : { title: 'Order placed', body: `£${Number(placed.total || total).toFixed(2)}, delivery ${when}.`, link: '#/order', tag: 'order' });
+    try {
+      if (order.amend?.of) await h.ref.collection('orders').doc(order.amend.of).set({ total: placed.total || total, amendedBy: FieldValue.arrayUnion({ id: ref.id, at: new Date(), by: ok.name || '' }) }, { merge: true });
+      await afterPlaced(h, order, lines, slotDate || order.deliveryDate);
+    } catch (e) {
+      // The order went through: only the tidy-up (staples, meals, the list) failed.
+      await log(`The order went through, but updating staples and the list didn't: ${e.message}`);
+      await update({ message: 'The order went through. Updating staples, meals and the list didn\'t finish, so check the list before the next shop.' }).catch(() => {});
+    }
   } catch (e) {
-    if (e instanceof Cancelled) {
-      // A trial takes out what it added; a real order leaves the basket for the Sainsbury's app.
-      if (order.trial && slotDate) for (const l of (await read()).lines || []) if (l.result === 'added' && l.uid) await shop.remove(l.uid, l.qty || 1, slotDate).catch(() => {});
+    if (placedDone) {
+      // Should never happen (the tidy-up has its own catch), but a placed order stays placed.
+      console.error(`After placing: ${e.message}`);
+    } else if (e instanceof Cancelled) {
+      // A trial (or a change to a placed order) takes out what it added; a real order leaves the basket for the Sainsbury's app.
+      if ((order.trial || order.amend) && slotDate) for (const l of (await read()).lines || []) if (l.result === 'added' && l.uid) await shop.remove(l.uid, l.qty || 1, slotDate).catch(() => {});
+      if (amending) await shop.cancelAmend().catch(() => {});
       if (reserved) await shop.release().catch(() => {});
-      await update({ state: 'cancelled', message: order.trial ? 'Trial cancelled. The slot was released and anything it added was taken out of the basket.' : 'Cancelled. The slot was released; anything already in the basket was left there.' });
+      await update({ state: 'cancelled', message: order.trial ? 'Trial cancelled. The slot was released and anything it added was taken out of the basket.' : order.amend ? 'Cancelled. What it added was taken out again and the order is as it was. Check the Sainsbury\'s app if you want to be sure.' : 'Cancelled. The slot was released; anything already in the basket was left there.' });
       await log('Cancelled');
     } else if (e.code === 'BANK_CHECK') {
       await update({ state: 'needs_you', message: e.message });
@@ -318,7 +398,9 @@ async function processOrder({ h, ref }) {
     } else {
       console.error(process.env.WORKER_QUIET ? `Order stopped: ${e.message}` : e);
       const d = await read().catch(() => ({}));
-      if (order.trial && slotDate) for (const l of d.lines || []) if (l.result === 'added' && l.uid) await shop.remove(l.uid, l.qty || 1, slotDate).catch(() => {});
+      if (d.state === 'placed') return; // never turn a placed order into a stopped one
+      if ((order.trial || (order.amend && d.state !== 'placing')) && slotDate) for (const l of d.lines || []) if (l.result === 'added' && l.uid) await shop.remove(l.uid, l.qty || 1, slotDate).catch(() => {});
+      if (amending && d.state !== 'placing') await shop.cancelAmend().catch(() => {});
       const placing = d.state === 'placing' && !order.trial;
       if (reserved && !placing) await shop.release().catch(() => {});
       // Sainsbury's own words go on the order screen only (the Actions log is public).
