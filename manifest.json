@@ -6,8 +6,8 @@
   "start_url": "./?source=pwa#/week",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#f6f6f5",
-  "theme_color": "#f6f6f5",
+  "background_color": "#f7f6fb",
+  "theme_color": "#f7f6fb",
   "share_target": {
     "action": "./",
     "method": "GET",
