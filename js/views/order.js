@@ -1,9 +1,9 @@
 // Order: one run of the order helper (worker/run.mjs), from the SMS code to
 // the placed order. Also "Add to this order" for a placed one.
-import * as S from '../store.js?v=12';
-import { icon } from '../ui.js?v=12';
-import { st, esc, money, fmtDay, fmtTime, today, plural, head, section, empty, run, render, toast, toMillis, keep, route, arg, routes, actions } from '../core.js?v=12';
-import { DONE_STATES, STEPS, activeOrder, isStale, flow, planId, startOrder, startAmend, slotText, findOrder } from '../state.js?v=12';
+import * as S from '../store.js?v=13';
+import { icon } from '../ui.js?v=13';
+import { st, esc, money, fmtDay, fmtTime, today, plural, head, section, empty, run, render, toast, toMillis, keep, route, arg, routes, actions } from '../core.js?v=13';
+import { DONE_STATES, STEPS, activeOrder, isStale, flow, planId, startOrder, startAmend, slotText, findOrder } from '../state.js?v=13';
 
 const CODE_MINUTES = 10; // worker/run.mjs: how long Sainsbury's code is waited for
 const HERO = {
@@ -125,6 +125,9 @@ function review(o) {
   const canChange = o.state === 'review' && !o.approvedBy;
   const missing = (o.lines || []).filter(l => l.result && l.result !== 'added');
   if (missing.length) html += `<div class="notice warn">${icon('alert')}<span class="grow"><b>${missing.length} not added</b><ul class="list compact" style="margin:6px -16px -10px">${missing.map(l => `<li><span class="grow"><span class="name">${esc(l.name)}</span><span class="meta" style="color:inherit;opacity:.8">${esc(l.result === 'not_found' ? 'Not found' : l.result === 'unavailable' ? 'Unavailable' : l.result)}</span></span></li>`).join('')}</ul></span></div>`;
+  // Stand-ins: the usual product couldn't be added, so the nearest match went in instead.
+  const standIns = (o.lines || []).filter(l => l.standIn && l.result === 'added');
+  if (standIns.length) html += `<div class="notice info">${icon('alert')}<span class="grow"><b>${standIns.length} not your usual</b> (the usual one wasn't available)<ul class="list compact" style="margin:6px -16px -10px">${standIns.map(l => `<li><span class="grow"><span class="name">${esc(l.product)}</span><span class="meta" style="color:inherit;opacity:.8">Instead of ${esc(l.standIn.from)}</span></span></li>`).join('')}</ul></span></div>`;
   // Offer swaps: what came in because it's on offer, what it replaced, the saving, and one tap to switch back.
   const swaps = (o.lines || []).filter(l => l.swap && l.result === 'added');
   const undone = (o.lines || []).filter(l => l.undone);
