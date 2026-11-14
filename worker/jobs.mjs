@@ -207,16 +207,21 @@ async function fillIngredients(h, only = null) {
   const snap = only ? [await only.get()] : (await h.ref.collection('meals').get()).docs;
   const todo = snap.filter(d => d.exists && !(d.data().ingredients || []).length && !d.data().ingredientsTried && !d.data().archived)
     .map(d => ({ id: d.id, name: d.data().name }));
+  // Dinners typed on Next shop ask for the method once their ingredients are in
+  // (the method is written to match the shopping list): see js/views/week.js.
+  const after = new Set(snap.filter(d => d.exists && d.data().recipeAfter).map(d => d.id));
+  const serves = Number(h.data().serves) || 4;
   for (let i = 0; i < todo.length; i += 15) {
     const chunk = todo.slice(i, i + 15);
     let lists = null;
-    try { lists = await claudeIngredients(chunk, h.data().notes || ''); }
+    try { lists = await claudeIngredients(chunk, h.data().notes || '', serves); }
     catch (e) { console.log(`Claude ingredients failed: ${e.message}`); }
     if (!lists) return; // no API key, or it failed: try again next time
     const b = db.batch();
     for (const m of chunk) {
       const ingredients = lists[m.id] || [];
-      b.set(h.ref.collection('meals').doc(m.id), { ingredientsTried: true, ...(ingredients.length ? { ingredients, ingredientsBy: 'claude' } : {}) }, { merge: true });
+      const recipe = after.has(m.id) ? { recipeAfter: FieldValue.delete(), ...(ingredients.length ? { recipeRequested: true } : {}) } : {};
+      b.set(h.ref.collection('meals').doc(m.id), { ingredientsTried: true, ...(ingredients.length ? { ingredients, ingredientsBy: 'claude' } : {}), ...recipe }, { merge: true });
     }
     await b.commit();
     console.log(`Filled in ingredients for ${chunk.length} meal(s)`);

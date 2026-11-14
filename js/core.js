@@ -5,9 +5,9 @@
 // Every module imports this file (and store.js, plan.js, ui.js) with the same
 // ?v= query, so they all share one copy. Bump it in every import when any of
 // the app's files change, so phones don't mix old and new files.
-import * as S from './store.js?v=11';
-import { iso } from './plan.js?v=11';
-import { icon, avatar } from './ui.js?v=11';
+import * as S from './store.js?v=12';
+import { iso } from './plan.js?v=12';
+import { icon, avatar } from './ui.js?v=12';
 
 export const $main = document.getElementById('main');
 export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -103,7 +103,16 @@ function applyFilter(el) {
   const q = el.value.trim().toLowerCase();
   const root = document.getElementById(el.dataset.filter);
   if (!root) return;
-  root.querySelectorAll('li[data-name]').forEach(li => { li.hidden = !!q && !li.dataset.name.includes(q); });
+  // Every word typed must start a word of the name, so "spag bol" finds Spaghetti Bolognese.
+  // data-max on the list caps how many matches show.
+  const words = q.split(/\s+/).filter(Boolean);
+  const max = Number(root.dataset.max) || Infinity;
+  let shown = 0;
+  root.querySelectorAll('li[data-name]').forEach(li => {
+    const name = ` ${li.dataset.name.replace(/[^a-z0-9à-ÿ]+/g, ' ')}`;
+    const hit = !q || li.dataset.name.includes(q) || words.every(w => name.includes(` ${w.replace(/[^a-z0-9à-ÿ]+/g, '')}`));
+    li.hidden = !hit || ++shown > max;
+  });
   // In a grouped list, hide a group whose rows are all filtered out.
   root.querySelectorAll('[data-group]').forEach(g => { g.hidden = !!q && !g.querySelector('li[data-name]:not([hidden])'); });
   // Collapsed groups open while searching, and go back to how they were after.

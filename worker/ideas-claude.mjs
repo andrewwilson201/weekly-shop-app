@@ -202,7 +202,7 @@ const ING_SCHEMA = {
     properties: { id: { type: 'string' }, ingredients: { type: 'array', items: ING_ITEM } } } } },
 };
 
-export async function claudeIngredients(meals, notes = '') {
+export async function claudeIngredients(meals, notes = '', serves = null) {
   if (!meals.length) return {};
   if (process.env.CLAUDE_FAKE) return Object.fromEntries(meals.map(m => [m.id, [{ item: `Pretend ingredient for ${m.name}`, qty: 1, search: 'sainsburys pasta' }]]));
   if (!process.env.ANTHROPIC_API_KEY) return null;
@@ -213,7 +213,7 @@ export async function claudeIngredients(meals, notes = '') {
     fallbacks: 'default',
     output_config: { effort: 'low', format: { type: 'json_schema', schema: ING_SCHEMA } },
     system: `You write shopping lists for a family's online Sainsbury's shop. For each dinner, list what to buy to cook it once for the whole household, as Sainsbury's shop items. Include every component in the dish's name (sides too). Mark store-cupboard basics (oil, salt, pepper, dried spices, stock cubes, flour) as pantry. Respect any household notes.`,
-    messages: [{ role: 'user', content: `Household notes: ${notes || 'none given'}\n\nDinners (JSON):\n${JSON.stringify(meals)}\n\nReturn an ingredients list for every id.` }],
+    messages: [{ role: 'user', content: `${serves ? `The household cooks for ${serves}.\n` : ''}Household notes: ${notes || 'none given'}\n\nDinners (JSON):\n${JSON.stringify(meals)}\n\nReturn an ingredients list for every id.` }],
   });
   if (response.stop_reason === 'refusal' || response.stop_reason === 'max_tokens') throw new Error(`Claude stopped: ${response.stop_reason}`);
   const out = JSON.parse(response.content.filter(b => b.type === 'text').map(b => b.text).join(''));

@@ -539,9 +539,10 @@ async function main() {
     // Recipe links and idea requests don't need the browser, so do them straight away.
     for (const i of await waitingImports()) if (await claimImport(i.ref)) await processImport(i);
     await requestedIdeas();
+    // Ingredients first: a dinner typed on Next shop asks for its method once they're in.
+    for (const h of await households()) await fillIngredients(h);
     await requestedRecipes();
     await finishedElsewhere();
-    for (const h of await households()) await fillIngredients(h);
     if (process.env.GITHUB_OUTPUT) (await import('node:fs')).appendFileSync(process.env.GITHUB_OUTPUT, `work=${n ? 'yes' : 'no'}\n`);
     return;
   }
