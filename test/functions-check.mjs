@@ -113,5 +113,38 @@ globalThis.fetch = realFetch;
   assert(await remindCutoff(db, now) === 0, 'and only once');
 }
 
+// "I finished it in the Sainsbury's app": a stopped order becomes placed, with the usual tidy-up, once.
+{
+  const listItem = await h.collection('list').add({ text: 'Bread', qty: 1, done: false });
+  const meal = await h.collection('meals').add({ name: 'Bank check pie', ingredients: [], timesChosen: 2 });
+  const staple = h.collection('staples').doc('111');
+  await staple.set({ name: 'Milk', uid: '111', every_days: 7, last_bought: '2026-11-01' });
+  const week = h.collection('weeks').doc('2026-11-14');
+  await week.set({ deliveryDate: '2026-11-15' });
+  const order = await h.collection('orders').add({
+    state: 'needs_you', week: '2026-11-14', deliveryDate: '2026-11-15', meals: [meal.id], total: 20,
+    slot: { start_time: '2026-11-15T19:30:00Z', end_time: '2026-11-15T20:30:00Z' },
+    message: 'Your bank wants to check the payment.',
+    lines: [{ key: 'list:' + listItem.id, source: 'list', listId: listItem.id, name: 'Bread', uid: '222', product: 'Bread', result: 'added', qty: 1 },
+      { key: 'staple:111', source: 'staple', name: 'Milk', uid: '111', product: 'Milk', result: 'added', qty: 2 }],
+  });
+  // An update that doesn't set finishedElsewhere does nothing.
+  const b0 = await order.get();
+  await fns.finishedElsewhere.run({ data: { before: b0, after: b0 }, params: { hid: 'fn-test', oid: order.id } });
+  assert((await order.get()).data().state === 'needs_you', 'a stopped order stays stopped until someone says it was finished');
+  await order.update({ finishedElsewhere: { uid: 'u1', name: 'Andrew', at: Date.now() } });
+  const b1 = await order.get();
+  await fns.finishedElsewhere.run({ data: { before: b0, after: b1 }, params: { hid: 'fn-test', oid: order.id } });
+  const done = (await order.get()).data();
+  assert(done.state === 'placed' && done.placedAt && !done.message, 'finished in the Sainsbury\'s app: the order is placed');
+  assert((await week.get()).data().status === 'ordered', 'and the plan is ordered');
+  assert(!(await listItem.get()).exists, 'the list item it bought is off the list');
+  assert((await meal.get()).data().timesChosen === 3, 'the dinner counts as chosen');
+  assert((await staple.get()).data().last_bought === '2026-11-15', 'the staple was bought on the delivery day');
+  // A second trigger (or the worker's backup) changes nothing.
+  await fns.finishedElsewhere.run({ data: { before: b0, after: b1 }, params: { hid: 'fn-test', oid: order.id } });
+  assert((await meal.get()).data().timesChosen === 3, 'and only once');
+}
+
 console.log('Functions OK');
 process.exit(0);

@@ -1,9 +1,9 @@
 // Next shop: the delivery day and the dinners for the shop being planned.
-import * as S from '../store.js?v=10';
-import { addDays, pickIdeas, awayOn, isIdea, planDate } from '../plan.js?v=10';
-import { icon, tile, avatar } from '../ui.js?v=10';
-import { st, esc, money, fmtDay, today, plural, head, section, empty, run, routes, actions } from '../core.js?v=10';
-import { mealById, plan, planId, savePlan, planOrder, activeOrder, nextDelivery, orderLine, slotText, flow, stillToCook, askRecipe } from '../state.js?v=10';
+import * as S from '../store.js?v=11';
+import { addDays, pickIdeas, awayOn, isIdea, planDate } from '../plan.js?v=11';
+import { icon, tile, avatar } from '../ui.js?v=11';
+import { st, esc, money, fmtDay, today, plural, head, section, empty, run, routes, actions } from '../core.js?v=11';
+import { mealById, plan, planId, savePlan, planOrder, activeOrder, nextDelivery, orderLine, slotText, flow, stillToCook, askRecipe } from '../state.js?v=11';
 
 const NEEDS_YOU = ['need_code', 'choose_slot', 'review', 'needs_you'];
 // "35 mins" on an idea card: from its recipe, or Claude's estimate.
