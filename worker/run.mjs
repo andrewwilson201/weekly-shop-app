@@ -188,10 +188,12 @@ async function processOrder({ h, ref }) {
       amending = true;
       res = { slot: opened.slot, reserved_until: new Date(Date.now() + 100 * 60000).toISOString() };
       slotDate = opened.slotDate;
-      await update({ slot: opened.slot ? { start_time: opened.slot.start_time, end_time: opened.slot.end_time || '' } : null });
+      await update({ slot: opened.slot ? { start_time: opened.slot.start_time, end_time: opened.slot.end_time || '' } : null, ...(opened.slot?.start_time ? { deliveryDate: londonDate(opened.slot.start_time) } : {}) });
     } else {
       reserved = true;
-      await update({ state: 'filling', message: FieldValue.delete(), slot: { start_time: res.slot.start_time, end_time: res.slot.end_time, reserved_until: res.reserved_until } });
+      // The slot can be on a different day from the one picked in the plan (slots
+      // around that day are offered): from here the order is for the slot's day.
+      await update({ state: 'filling', message: FieldValue.delete(), deliveryDate: londonDate(res.slot.start_time), slot: { start_time: res.slot.start_time, end_time: res.slot.end_time, reserved_until: res.reserved_until } });
       await log(`Booked ${choice}`);
       slotDate = res.slot.start_time.slice(0, 10);
     }
