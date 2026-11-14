@@ -1,10 +1,10 @@
 // Staples: things bought regularly, learned from past orders.
-import * as S from '../store.js?v=10';
-import { addDays, stapleStatus, skipRule } from '../plan.js?v=10';
-import { icon } from '../ui.js?v=10';
-import { st, esc, fmtDay, today, head, section, empty, run, keep, routes, actions } from '../core.js?v=10';
-import { deliveryDate } from '../state.js?v=10';
-import { libTabs } from './meals.js?v=10';
+import * as S from '../store.js?v=11';
+import { addDays, stapleStatus, skipRule } from '../plan.js?v=11';
+import { icon } from '../ui.js?v=11';
+import { st, esc, fmtDay, today, head, section, empty, run, keep, routes, actions } from '../core.js?v=11';
+import { deliveryDate } from '../state.js?v=11';
+import { libTabs } from './meals.js?v=11';
 
 // Only what's due is open; the rest is folded away so the screen stays short.
 const GROUPS = [['add', 'Due this shop'], ['suggest', 'For meals, when needed'], ['not_due', 'Not due yet'], ['lapsed', 'Not bought lately'], ['dropped', 'Turned off']];

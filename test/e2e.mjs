@@ -194,6 +194,47 @@ assert(await a.isVisible('text=Because you liked'), 'Claude reasons shown');
 assert((await a.$$('.meal.on')).length === picksBefore, 'picks kept when Claude refreshes ideas');
 await a.screenshot({ path: `${SHOTS}/05d-claude-ideas.png`, fullPage: true });
 
+// Type a dinner on Next shop: meals you already have are offered as you type;
+// a new one is picked straight away and Claude (pretend) works out what to buy.
+await a.goto(`${BASE}#/week`); await a.waitForSelector('form[data-form=addDish]');
+{
+  const box = 'form[data-form=addDish] input[name=dish]';
+  assert(!(await a.isVisible('#dishMatches')), 'no meal suggestions before typing');
+  await a.fill(box, 'turkey spag');
+  await a.waitForSelector('#dishMatches li:has-text("Turkey meatballs with spaghetti"):visible');
+  assert(await a.locator('#dishMatches li:visible').count() === 1, 'typing finds the meal you already have, word by word');
+  await a.evaluate(() => { const f = document.querySelector('form[data-form=addDish]'); document.documentElement.style.scrollBehavior = 'auto'; window.scrollTo(0, f.getBoundingClientRect().top + window.scrollY - 200); });
+  await a.evaluate(() => { document.getElementById('toast').style.display = 'none'; });
+  await a.screenshot({ path: `${SHOTS}/05t1-type-dish-match.png` });
+  await a.evaluate(() => { document.getElementById('toast').style.display = ''; });
+  await a.fill(box, 'homemade PIZZA night');
+  await a.press(box, 'Enter');
+  await a.waitForSelector('.meal.on:has-text("Homemade pizza night")');
+  assert(await a.locator('.meal:has-text("Homemade pizza night")').count() === 1, 'typing a meal you already have picks that one, not a copy');
+  await a.fill(box, 'spaghetti Bolognese');
+  await a.press(box, 'Enter');
+  await a.waitForSelector('.meal.on:has-text("Spaghetti Bolognese") >> text=Working out ingredients');
+  assert(await a.inputValue(box) === '', 'the box empties after adding');
+  await a.evaluate(() => { const f = document.querySelector('form[data-form=addDish]'); document.documentElement.style.scrollBehavior = 'auto'; window.scrollTo(0, f.getBoundingClientRect().top + window.scrollY - 200); });
+  await a.evaluate(() => { document.getElementById('toast').style.display = 'none'; });
+  await a.screenshot({ path: `${SHOTS}/05t2-type-dish-working.png` });
+  await a.evaluate(() => { document.getElementById('toast').style.display = ''; });
+  await new Promise(r => spawn(process.execPath, ['worker/run.mjs', 'check'], { env, stdio: 'inherit' }).on('exit', r));
+  await a.waitForSelector('.meal:has-text("Spaghetti Bolognese") >> text=1 ingredient · check', { timeout: 15000 });
+  assert(true, 'Claude worked out the ingredients for a typed dinner');
+  await a.evaluate(() => { const f = document.querySelector('form[data-form=addDish]'); document.documentElement.style.scrollBehavior = 'auto'; window.scrollTo(0, f.getBoundingClientRect().top + window.scrollY - 200); });
+  await a.evaluate(() => { document.getElementById('toast').style.display = 'none'; });
+  await a.screenshot({ path: `${SHOTS}/05t3-type-dish-done.png` });
+  await a.evaluate(() => { document.getElementById('toast').style.display = ''; });
+  await a.locator('.meal:has-text("Spaghetti Bolognese") [data-act=viewRecipe]').click();
+  await a.waitForSelector('text=Pretend step one for Spaghetti Bolognese', { timeout: 10000 });
+  assert(true, 'the method is written once the ingredients are in');
+  await a.goto(`${BASE}#/meals`);
+  await a.fill('input[data-filter=mealList]', 'bolognese');
+  assert(await a.isVisible('#mealList >> text=Spaghetti Bolognese'), 'a typed dinner joins Meals for next time');
+  await a.fill('input[data-filter=mealList]', '');
+}
+
 // Settings › Recipe sites: the Guardian by default, with how the last read went; add another
 await a.goto(`${BASE}#/settings`);
 await a.waitForSelector('text=Recipe sites');

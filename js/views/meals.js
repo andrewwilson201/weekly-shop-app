@@ -1,9 +1,9 @@
 // Meals: the household's dinners, recipe links, and the meal editor.
-import * as S from '../store.js?v=10';
-import { isIdea } from '../plan.js?v=10';
-import { icon, tile, MEAL_CATEGORIES, mealCategory, autoCategory, categoryTile } from '../ui.js?v=10';
-import { st, esc, fmtDay, plural, head, section, empty, run, render, keep, resetKeep, arg, openCats, routes, actions, hooks } from '../core.js?v=10';
-import { mealById, plan, savePlan } from '../state.js?v=10';
+import * as S from '../store.js?v=11';
+import { isIdea } from '../plan.js?v=11';
+import { icon, tile, MEAL_CATEGORIES, mealCategory, autoCategory, categoryTile } from '../ui.js?v=11';
+import { st, esc, fmtDay, plural, head, section, empty, run, render, keep, resetKeep, arg, openCats, routes, actions, hooks } from '../core.js?v=11';
+import { mealById, plan, savePlan } from '../state.js?v=11';
 
 export const libTabs = now => `<div class="seg" role="tablist">${[['meals', 'Meals'], ['staples', 'Staples']].map(([r, l]) => `<a href="#/${r}" role="tab" class="${r === now ? 'on' : ''}" aria-selected="${r === now}">${l}</a>`).join('')}</div>`;
 routes.meals = () => {
@@ -51,7 +51,7 @@ function importsHtml() {
     ${i.state === 'done' && i.mealId ? `<a class="btn small tonal" href="#/meal/${i.mealId}">Check it</a>` : ''}
     ${i.state !== 'requested' ? `<button class="iconbtn sm" data-act="dismissImport" data-id="${i.id}" aria-label="Dismiss">${icon('x')}</button>` : ''}</li>`).join('') + `</ul></div>`;
 }
-async function importLink(url, addToWeek = true) {
+export async function importLink(url, addToWeek = true) {
   url = String(url).trim();
   if (!/^https?:\/\//i.test(url)) throw new Error('That doesn\'t look like a web link');
   await S.addH(['imports'], { url, addToWeek, by: S.me(), state: 'requested', createdAt: S.serverTimestamp() });

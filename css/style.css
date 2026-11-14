@@ -516,3 +516,16 @@ div.field .hint { font-weight: 400; color: var(--muted); font-size: 13px; margin
 /* Next shop: "Already booked in the Sainsbury's app?" */
 .card.booked { gap: 14px; align-items: center; cursor: pointer; margin-top: 4px; }
 .card.booked .small { display: block; margin-top: 2px; }
+
+/* "Know what you want to cook?" on Next shop: type a dinner. Matching meals
+   show under the box only while typing, and only when there are some. */
+.card.dish h3 { display: flex; gap: 8px; align-items: center; }
+.card.dish > p { margin: 4px 0 12px; }
+.dish-matches { margin-top: 12px; }
+.dish-matches > p { margin: 0 0 4px; }
+.dish-matches:not([data-searching]), .dish-matches:not(:has(li:not([hidden]))) { display: none; }
+.dish-matches .list > li { padding-left: 0; padding-right: 0; }
+.dish-matches .list > li::before { left: 0; }
+.chip.working .spinner { width: 11px; height: 11px; border-width: 2px; }
+.chip.link.warn { color: var(--warm); }
+.chip.link.warn:hover { background: var(--warm-soft); }

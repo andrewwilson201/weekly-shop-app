@@ -1,9 +1,10 @@
 // Next shop: the delivery day and the dinners for the shop being planned.
-import * as S from '../store.js?v=10';
-import { addDays, pickIdeas, awayOn, isIdea, planDate } from '../plan.js?v=10';
-import { icon, tile, avatar } from '../ui.js?v=10';
-import { st, esc, money, fmtDay, today, plural, head, section, empty, run, routes, actions } from '../core.js?v=10';
-import { mealById, plan, planId, savePlan, planOrder, activeOrder, nextDelivery, orderLine, slotText, flow, stillToCook, askRecipe } from '../state.js?v=10';
+import * as S from '../store.js?v=11';
+import { addDays, pickIdeas, awayOn, isIdea, planDate } from '../plan.js?v=11';
+import { icon, tile, avatar } from '../ui.js?v=11';
+import { st, esc, money, fmtDay, today, plural, head, section, empty, run, keep, routes, actions } from '../core.js?v=11';
+import { importLink } from './meals.js?v=11';
+import { mealById, plan, planId, savePlan, planOrder, activeOrder, nextDelivery, orderLine, slotText, flow, stillToCook, askRecipe } from '../state.js?v=11';
 
 const NEEDS_YOU = ['need_code', 'choose_slot', 'review', 'needs_you'];
 // "35 mins" on an idea card: from its recipe, or Claude's estimate.
@@ -29,7 +30,7 @@ routes.week = () => {
   if (!w?.offered?.length) {
     if (w?.ideasRequested) return html + `<div class="card">${empty('sparkle', 'Claude is choosing ideas', 'They\'ll appear here in a minute or two.', '<span class="spinner" style="display:inline-block"></span>')}</div>`;
     return html + `<div class="card">${empty('sparkle', 'Start the next shop', 'Out of food? Get ten dinner ideas and pick as many as you need.',
-      `<div class="row" style="justify-content:center"><button class="btn primary" data-act="askClaude">${icon('sparkle')} Ask Claude for ideas</button><button class="btn" data-act="makeIdeas">Pick from our meals now</button></div>`)}</div>`;
+      `<div class="row" style="justify-content:center"><button class="btn primary" data-act="askClaude">${icon('sparkle')} Ask Claude for ideas</button><button class="btn" data-act="makeIdeas">Pick from our meals now</button></div>`)}</div>` + dishBox();
   }
   const picks = w.picks || {};
   const n = Object.keys(picks).length;
@@ -50,6 +51,7 @@ routes.week = () => {
       : 'Turn this on if you\'ve booked the slot and checked out already. The app adds this shop to that order.'}</span></span>
     <input type="checkbox" class="switch" data-change="booked" ${w.booked ? 'checked' : ''} aria-label="Already booked in the Sainsbury's app"></label>`;
   html += section('2. Pick your dinners', { right: `<span class="small muted">${w.ideasBy === 'claude' ? 'Ideas by Claude' : 'From your meals'}</span>` });
+  html += dishBox();
   w.offered.forEach(id => {
     const m = mealById(id); if (!m) return;
     const p = picks[id];
@@ -59,13 +61,13 @@ routes.week = () => {
       ${tile(m)}
       <span class="grow"><span class="title">${esc(m.name)}</span>
       ${w.reasons?.[id] ? `<span class="why">${esc(w.reasons[id])}</span>` : ''}
-      <span class="chips">${tag}${time ? `<span class="chip outline">${icon('clock')} ${esc(time)}</span>` : ''}<span class="chip link" data-act="viewRecipe" data-id="${esc(id)}" role="link">${icon('book')} Recipe</span>${m.cuisine ? `<span class="chip outline">${esc(m.cuisine)}</span>` : ''}${p ? `<span class="chip ok">${avatar(p, 'sm')} ${esc(p.name?.split(' ')[0] || '')}</span>` : ''}</span></span>
+      <span class="chips">${tag}${time ? `<span class="chip outline">${icon('clock')} ${esc(time)}</span>` : ''}${ingredientsChip(m)}<span class="chip link" data-act="viewRecipe" data-id="${esc(id)}" role="link">${icon('book')} Recipe</span>${m.cuisine ? `<span class="chip outline">${esc(m.cuisine)}</span>` : ''}${p ? `<span class="chip ok">${avatar(p, 'sm')} ${esc(p.name?.split(' ')[0] || '')}</span>` : ''}</span></span>
       <span class="tick">${icon('check')}</span></button>`;
   });
   html += `<div class="toolbar">
     <button class="btn small tonal" data-act="askClaude" ${w.ideasRequested ? 'disabled' : ''}>${icon('sparkle')} ${w.ideasRequested ? 'Claude is thinking…' : 'Ask Claude for fresh ideas'}</button>
     <button class="btn small outline" data-act="remakeIdeas">${icon('shuffle')} Swap the unpicked ones</button>
-    <button class="btn small outline" data-act="addIdea">${icon('plus')} Add another meal</button></div>`;
+    <button class="btn small outline" data-act="addIdea">${icon('bowl')} Browse our meals</button></div>`;
   if (!wo) html += `<p class="small muted" style="margin:4px 4px 0;text-align:right"><button class="link" data-act="startAfresh">Start afresh</button></p>`;
 
   html += wo
@@ -104,3 +106,58 @@ actions.startAfresh = () => {
   if (!confirm('Start a new shop from scratch? The dinners picked here are put aside.')) return;
   run(() => S.updateH(['weeks', planId()], { status: 'closed' }), 'New shop started');
 };
+
+// "Know what you want to cook?": type a dinner and it's picked for this shop.
+// While typing, matching meals you already have are offered first (picking
+// one keeps its ingredients and the products you usually buy). Anything new
+// is saved as a meal with no ingredients, which the newMeal function (or the
+// worker) fills in with Claude, then writes the method. A recipe link pasted
+// here is read just like one added on Meals.
+const typedMeals = () => st.meals.filter(m => !m.archived && m.name);
+function dishBox() {
+  const picks = plan()?.picks || {};
+  // Your meal library only (as on Meals): unpicked ideas stay out.
+  const rows = typedMeals().filter(m => !isIdea(m)).sort((a, b) => (b.timesChosen || 0) - (a.timesChosen || 0) || a.name.localeCompare(b.name)).map(m => `<li data-name="${esc(m.name.toLowerCase())}">${tile(m, 'sm')}
+    <span class="grow"><span class="name">${esc(m.name)}</span><span class="meta">${m.timesChosen ? `Picked ${m.timesChosen}× before` : 'In your meals'}</span></span>
+    ${picks[m.id] ? `<span class="pill ok">${icon('check')} Picked</span>` : `<button type="button" class="btn small tonal" data-act="pickDish" data-id="${esc(m.id)}">Pick this</button>`}</li>`).join('');
+  return `<form class="card dish" data-form="addDish">
+    <h3>${icon('plus')} Know what you want to cook?</h3>
+    <p class="small muted">Type a dinner, like spaghetti Bolognese, and Claude works out what to buy. A recipe link works too.</p>
+    <div class="inputrow"><input type="text" name="dish" data-keep="dish" data-filter="dishMatches" placeholder="e.g. Spaghetti Bolognese" autocomplete="off" autocapitalize="sentences" enterkeyhint="done" aria-label="A dinner, or a recipe link"><button class="btn primary">Add</button></div>
+    <div class="dish-matches" id="dishMatches" data-max="4"><p class="small muted">Already in your meals:</p><ul class="list">${rows}</ul></div></form>`;
+}
+const norm = t => String(t).toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9à-ÿ]+/g, ' ').trim();
+// Picks a meal for whoever typed it, adding it to this shop's dinners.
+async function pickForMe(id) {
+  const w = plan() || {};
+  const m = mealById(id);
+  if (m && isIdea(m)) await S.updateH(['meals', id], { idea: false });
+  if (m) askRecipe(m);
+  // A dinner you just typed goes to the top, right under the box.
+  await savePlan({ offered: [id, ...(w.offered || []).filter(x => x !== id)], picks: { [id]: S.me() } });
+}
+const clearDish = () => { keep.dish = ''; const i = document.querySelector('[data-keep=dish]'); if (i) i.value = ''; };
+actions.pickDish = el => { clearDish(); run(() => pickForMe(el.dataset.id), `${mealById(el.dataset.id)?.name || 'Dinner'} picked`); };
+actions.addDish = f => {
+  const text = f.dish.value.trim().replace(/\s+/g, ' ');
+  if (!text) return;
+  clearDish();
+  if (/^https?:\/\//i.test(text) || /^www\./i.test(text)) return run(() => importLink(/^www\./i.test(text) ? `https://${text}` : text, true), 'Got it. The recipe will appear in a moment');
+  const same = typedMeals().find(m => norm(m.name) === norm(text));
+  if (same) return run(() => pickForMe(same.id), `${same.name} picked, from your meals`);
+  const name = text.charAt(0).toUpperCase() + text.slice(1);
+  run(async () => {
+    // recipeAfter: once Claude has the ingredients, the method is written from them.
+    const ref = await S.addH(['meals'], { name, ingredients: [], timesChosen: 0, createdAt: S.serverTimestamp(), addedBy: S.me(), typed: true, recipeAfter: true });
+    await pickForMe(ref.id);
+  }, `${name} added. Claude is working out the ingredients`);
+};
+// Under a typed dinner: how its ingredients are coming along, with a link to check them.
+function ingredientsChip(m) {
+  const n = (m.ingredients || []).length;
+  if (!n && !m.ingredientsTried) return `<span class="chip working"><span class="spinner"></span> Working out ingredients…</span>`;
+  if (!n) return `<span class="chip link warn" data-act="editMeal" data-id="${esc(m.id)}" role="link">${icon('alert')} Add the ingredients</span>`;
+  if (m.typed && m.ingredientsBy === 'claude') return `<span class="chip link" data-act="editMeal" data-id="${esc(m.id)}" role="link">${icon('sparkle')} ${plural(n, 'ingredient')} · check</span>`;
+  return '';
+}
+actions.editMeal = el => { location.hash = `#/meal/${encodeURIComponent(el.dataset.id)}`; };
