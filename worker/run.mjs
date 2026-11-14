@@ -34,14 +34,14 @@ async function makeShop(opts) {
   const { Sainsburys: Real } = await import('./sainsburys.mjs');
   return new Real(opts);
 }
-import { iso, daysBetween, upcomingOrders, ordersNear, SKIPS_TO_SUGGEST, learnStaple, recordBought, usualCandidates, searchTerms, cheapestSwap, priceChange } from '../js/plan.js';
+import { iso, daysBetween, upcomingOrders, ordersNear, usualCandidates, searchTerms, cheapestSwap, priceChange } from '../js/plan.js';
 
 // The worker's own key if it has one (database and notifications only), else the deploy key.
 const sa = process.env.WORKER_SERVICE_ACCOUNT || process.env.FIREBASE_SERVICE_ACCOUNT;
 initializeApp(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: process.env.GCLOUD_PROJECT || 'weekly-shop-177b1' }
   : { credential: sa ? cert(JSON.parse(sa)) : applicationDefault() });
 const db = getFirestore();
-const { makeIdeas, processImport, claimImport, claimIdeas, fillIngredients, fillRecipe } = makeJobs(db);
+const { makeIdeas, processImport, claimImport, claimIdeas, fillIngredients, fillRecipe, afterPlaced, finishElsewhere } = makeJobs(db);
 
 const DEADLINE = Date.now() + (Number(process.env.WORKER_MINUTES) || 50) * 60000;
 const ACTIVE = ['requested', 'logging_in', 'need_code', 'choose_slot', 'filling', 'review', 'placing'];
@@ -83,6 +83,14 @@ async function waitingOrders() {
     out.push(...q.docs.map(d => ({ h, ref: d.ref, data: d.data() })));
   }
   return out;
+}
+
+// "I finished it in the Sainsbury's app" (the finishElsewhere function usually does these first).
+async function finishedElsewhere() {
+  for (const h of await households()) {
+    const q = await h.ref.collection('orders').where('state', '==', 'needs_you').get();
+    for (const d of q.docs) if (d.data().finishedElsewhere) await finishElsewhere(h, d.ref);
+  }
 }
 
 // ---------- recipe links ----------
@@ -521,51 +529,6 @@ async function pickCheaper(h, lines, shop, log) {
   if (n) await log(`Cheaper swaps: ${n}, saving about £${saved.toFixed(2)}`);
 }
 
-// Record what was bought: staples' last_bought, meals chosen, list items done.
-async function afterPlaced(h, order, lines, delivery) {
-  const b = db.batch();
-  // Every staple bought, whether it came in as a staple, a meal ingredient or a
-  // list item (same product), gets the date logged and its frequency re-learned.
-  const staples = new Map((await h.ref.collection('staples').get()).docs.map(d => [d.id, d]));
-  const bought = new Map();
-  for (const l of lines) {
-    if (l.result !== 'added') continue;
-    const was = l.swap?.fromUid || l.uid;
-    const id = l.source === 'staple' ? l.key.slice(7) : was && staples.has(String(was)) ? String(was) : null;
-    if (id && staples.has(id)) bought.set(id, (bought.get(id) || 0) + (l.qty || 1));
-    if (l.source === 'list' && l.listId) b.delete(h.ref.collection('list').doc(l.listId));
-  }
-  for (const [id, qty] of bought) b.set(staples.get(id).ref, { ...learnStaple(staples.get(id).data(), delivery, qty), skipped_on: FieldValue.delete() }, { merge: true });
-  // Staples that were due but unticked: push them back, and count the skip.
-  for (const id of order.skippedStaples || []) {
-    const ref = h.ref.collection('staples').doc(id);
-    const s = (await ref.get()).data() || {};
-    const skips = (s.skips || 0) + 1;
-    b.set(ref, { skips, skipped_on: delivery, ...(skips === SKIPS_TO_SUGGEST ? { learned: `Left out ${skips} times in a row, so it's a suggestion now` } : {}) }, { merge: true });
-  }
-  // Remember the usual products picked for meal ingredients, so next time they show in the shop.
-  const mealPicks = new Map();
-  for (const l of lines) if (l.source === 'meal' && l.usual && l.result === 'added') {
-    const [, id, ...rest] = l.key.split(':'); const item = rest.join(':');
-    if (!mealPicks.has(id)) mealPicks.set(id, new Map());
-    // A cheaper swap doesn't replace the usual: it's checked again each week.
-    mealPicks.get(id).set(item, l.swap ? { uid: l.swap.fromUid, product: l.swap.from } : { uid: l.uid, product: l.product });
-  }
-  for (const [id, picks] of mealPicks) {
-    const ref = h.ref.collection('meals').doc(id);
-    const m = (await ref.get()).data();
-    if (m?.ingredients) b.set(ref, { ingredients: m.ingredients.map(g => picks.has(g.item) ? { ...g, ...picks.get(g.item) } : g) }, { merge: true });
-  }
-  for (const id of order.meals || []) b.set(h.ref.collection('meals').doc(id), { timesChosen: FieldValue.increment(1), lastChosen: delivery }, { merge: true });
-  b.set(h.ref.collection('weeks').doc(order.week), { status: 'ordered', orderedFor: delivery }, { merge: true });
-  // Everything bought joins the products list, so typed list items find "your usual".
-  const pref = h.ref.collection('meta').doc('products');
-  let products = (await pref.get()).data()?.items || [];
-  for (const l of lines) if (l.result === 'added' && l.uid) products = l.swap ? recordBought(products, l.swap.fromUid, l.swap.from, delivery) : recordBought(products, l.uid, l.product || l.name, delivery);
-  b.set(pref, { items: products }, { merge: true });
-  await b.commit();
-}
-
 async function main() {
   if (process.argv[2] === 'check') {
     // Quick look before the workflow installs a browser.
@@ -575,6 +538,7 @@ async function main() {
     for (const i of await waitingImports()) if (await claimImport(i.ref)) await processImport(i);
     await requestedIdeas();
     await requestedRecipes();
+    await finishedElsewhere();
     for (const h of await households()) await fillIngredients(h);
     if (process.env.GITHUB_OUTPUT) (await import('node:fs')).appendFileSync(process.env.GITHUB_OUTPUT, `work=${n ? 'yes' : 'no'}\n`);
     return;

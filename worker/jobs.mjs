@@ -7,7 +7,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { fetchRecipe, recipeFrom } from './recipe.mjs';
 import { claudeIdeas, claudeIngredients, claudeRecipe } from './ideas-claude.mjs';
 import { recentRecipes, recipeSources } from './feeds.mjs';
-import { pickIdeas, iso, currentPlanId } from '../js/plan.js';
+import { pickIdeas, iso, currentPlanId, SKIPS_TO_SUGGEST, learnStaple, recordBought } from '../js/plan.js';
 
 export function makeJobs(db) {
 
@@ -223,5 +223,76 @@ async function fillIngredients(h, only = null) {
   }
 }
 
-return { claimImport, claimIdeas, makeIdeas, processImport, fakeRecipe, fillIngredients, fillRecipe };
+// Record what was bought: staples' last_bought, meals chosen, list items done.
+async function afterPlaced(h, order, lines, delivery) {
+  const b = db.batch();
+  // Every staple bought, whether it came in as a staple, a meal ingredient or a
+  // list item (same product), gets the date logged and its frequency re-learned.
+  const staples = new Map((await h.ref.collection('staples').get()).docs.map(d => [d.id, d]));
+  const bought = new Map();
+  for (const l of lines) {
+    if (l.result !== 'added') continue;
+    const was = l.swap?.fromUid || l.uid;
+    const id = l.source === 'staple' ? l.key.slice(7) : was && staples.has(String(was)) ? String(was) : null;
+    if (id && staples.has(id)) bought.set(id, (bought.get(id) || 0) + (l.qty || 1));
+    if (l.source === 'list' && l.listId) b.delete(h.ref.collection('list').doc(l.listId));
+  }
+  for (const [id, qty] of bought) b.set(staples.get(id).ref, { ...learnStaple(staples.get(id).data(), delivery, qty), skipped_on: FieldValue.delete() }, { merge: true });
+  // Staples that were due but unticked: push them back, and count the skip.
+  for (const id of order.skippedStaples || []) {
+    const ref = h.ref.collection('staples').doc(id);
+    const s = (await ref.get()).data() || {};
+    const skips = (s.skips || 0) + 1;
+    b.set(ref, { skips, skipped_on: delivery, ...(skips === SKIPS_TO_SUGGEST ? { learned: `Left out ${skips} times in a row, so it's a suggestion now` } : {}) }, { merge: true });
+  }
+  // Remember the usual products picked for meal ingredients, so next time they show in the shop.
+  const mealPicks = new Map();
+  for (const l of lines) if (l.source === 'meal' && l.usual && l.result === 'added') {
+    const [, id, ...rest] = l.key.split(':'); const item = rest.join(':');
+    if (!mealPicks.has(id)) mealPicks.set(id, new Map());
+    // A cheaper swap doesn't replace the usual: it's checked again each week.
+    mealPicks.get(id).set(item, l.swap ? { uid: l.swap.fromUid, product: l.swap.from } : { uid: l.uid, product: l.product });
+  }
+  for (const [id, picks] of mealPicks) {
+    const ref = h.ref.collection('meals').doc(id);
+    const m = (await ref.get()).data();
+    if (m?.ingredients) b.set(ref, { ingredients: m.ingredients.map(g => picks.has(g.item) ? { ...g, ...picks.get(g.item) } : g) }, { merge: true });
+  }
+  for (const id of order.meals || []) b.set(h.ref.collection('meals').doc(id), { timesChosen: FieldValue.increment(1), lastChosen: delivery }, { merge: true });
+  b.set(h.ref.collection('weeks').doc(order.week), { status: 'ordered', orderedFor: delivery }, { merge: true });
+  // Everything bought joins the products list, so typed list items find "your usual".
+  const pref = h.ref.collection('meta').doc('products');
+  let products = (await pref.get()).data()?.items || [];
+  for (const l of lines) if (l.result === 'added' && l.uid) products = l.swap ? recordBought(products, l.swap.fromUid, l.swap.from, delivery) : recordBought(products, l.uid, l.product || l.name, delivery);
+  b.set(pref, { items: products }, { merge: true });
+  await b.commit();
+}
+
+// "I finished it in the Sainsbury's app": the helper stopped (the bank wanted
+// a check, nobody approved in time, the basket was under the minimum...) and
+// someone checked out in the Sainsbury's app instead. The app writes
+// finishedElsewhere; this marks the order placed and does the same tidy-up as
+// a placed order. It never talks to Sainsbury's, so it can't order or pay twice.
+// Both the function and the worker may see it; the transaction lets one do it.
+async function finishElsewhere(h, ref) {
+  const order = await db.runTransaction(async t => {
+    const d = (await t.get(ref)).data();
+    if (!d?.finishedElsewhere || d.state !== 'needs_you' || d.trial) return null;
+    t.update(ref, { state: 'placed', placedAt: FieldValue.serverTimestamp(), stoppedAt: FieldValue.delete(), message: FieldValue.delete(), log: FieldValue.arrayUnion(`Finished in the Sainsbury's app (said ${d.finishedElsewhere.name || 'someone'})`) });
+    return d;
+  });
+  if (!order) return false;
+  const delivery = (order.slot?.start_time ? londonDay(order.slot.start_time) : '') || order.deliveryDate;
+  try {
+    if (order.amend?.of) await h.ref.collection('orders').doc(order.amend.of).set({ amendedBy: FieldValue.arrayUnion({ id: ref.id, at: new Date(), by: order.finishedElsewhere.name || '' }) }, { merge: true });
+    await afterPlaced(h, order, order.lines || [], delivery);
+  } catch (e) {
+    console.error(`Tidy-up after an order finished elsewhere: ${e.message}`);
+    await ref.update({ message: 'Marked as ordered. Updating staples, meals and the list didn\'t finish, so check the list before the next shop.' }).catch(() => {});
+  }
+  return true;
+}
+const londonDay = t => new Date(t).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+
+return { claimImport, claimIdeas, makeIdeas, processImport, fakeRecipe, fillIngredients, fillRecipe, afterPlaced, finishElsewhere };
 }

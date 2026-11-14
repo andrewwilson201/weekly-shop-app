@@ -205,7 +205,7 @@ export class Sainsburys {
     const after = p.url();
     const body = await p.innerText('body').catch(() => '');
     if (/3d|secure|verify|authentic|challenge/i.test(after) || /verify (it's|it is) you|approve (this|the) (payment|purchase)|bank app/i.test(body)) {
-      const e = new Error('Your bank wants to check the payment. Open the Sainsbury\'s app to finish it.'); e.code = 'BANK_CHECK'; throw e;
+      const e = new Error('Your bank wants to check the payment. Finish it in the Sainsbury\'s app, then tap "I finished it in the Sainsbury\'s app" below.'); e.code = 'BANK_CHECK'; throw e;
     }
     const orderNumber = (body.match(/order (?:number|no\.?)\s*:?\s*#?\s*(\d{8,})/i) || [])[1] || '';
     if (!/confirmation|order-confirmation|thank|updated|changes (have been )?saved/i.test(after + body.slice(0, 2000)) && !orderNumber) {
