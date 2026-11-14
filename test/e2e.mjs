@@ -301,6 +301,7 @@ await a.click('.slots button >> nth=0');
 await a.waitForSelector('button:has-text("Approve £")', { timeout: 30000 });
 await a.screenshot({ path: `${SHOTS}/09-review.png`, fullPage: true });
 assert(await a.isVisible('text=not added'), 'unfound item reported');
+assert(await a.isVisible('text=not your usual') && await a.isVisible('text=Instead of Sainsbury\'s Organic salted butter 250g'), 'an out-of-stock staple gets a stand-in, shown for review');
 assert(!(await a.isVisible('text=organic chicken breast')), 'the full basket starts folded away');
 await a.click('button[data-act=refreshTotal]');
 await a.waitForSelector('button[data-act=refreshTotal]:has-text("Refresh"):not([disabled])', { timeout: 30000 });

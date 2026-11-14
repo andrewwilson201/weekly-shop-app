@@ -237,7 +237,7 @@ async function afterPlaced(h, order, lines, delivery) {
   const bought = new Map();
   for (const l of lines) {
     if (l.result !== 'added') continue;
-    const was = l.swap?.fromUid || l.uid;
+    const was = l.swap?.fromUid || l.standIn?.fromUid || l.uid;
     const id = l.source === 'staple' ? l.key.slice(7) : was && staples.has(String(was)) ? String(was) : null;
     if (id && staples.has(id)) bought.set(id, (bought.get(id) || 0) + (l.qty || 1));
     if (l.source === 'list' && l.listId) b.delete(h.ref.collection('list').doc(l.listId));
@@ -256,7 +256,9 @@ async function afterPlaced(h, order, lines, delivery) {
     const [, id, ...rest] = l.key.split(':'); const item = rest.join(':');
     if (!mealPicks.has(id)) mealPicks.set(id, new Map());
     // A cheaper swap doesn't replace the usual: it's checked again each week.
-    mealPicks.get(id).set(item, l.swap ? { uid: l.swap.fromUid, product: l.swap.from } : { uid: l.uid, product: l.product });
+    // Nor does a stand-in for one that was out of stock.
+    const usual = l.swap ? { uid: l.swap.fromUid, product: l.swap.from } : l.standIn ? { uid: l.standIn.fromUid, product: l.standIn.from } : { uid: l.uid, product: l.product };
+    mealPicks.get(id).set(item, usual);
   }
   for (const [id, picks] of mealPicks) {
     const ref = h.ref.collection('meals').doc(id);

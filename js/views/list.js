@@ -1,9 +1,9 @@
 // The shared shopping list.
-import * as S from '../store.js?v=12';
-import { matchUsual } from '../plan.js?v=12';
-import { icon } from '../ui.js?v=12';
-import { st, esc, fmtDay, head, section, empty, run, render, keep, routes, actions } from '../core.js?v=12';
-import { usual } from '../state.js?v=12';
+import * as S from '../store.js?v=13';
+import { matchUsual } from '../plan.js?v=13';
+import { icon } from '../ui.js?v=13';
+import { st, esc, fmtDay, head, section, empty, run, render, keep, routes, actions } from '../core.js?v=13';
+import { usual } from '../state.js?v=13';
 
 routes.list = () => {
   const items = st.list;

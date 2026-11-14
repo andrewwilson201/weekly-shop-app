@@ -23,7 +23,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { FakeSainsburys } from './fake.mjs';
 import { makeJobs } from './jobs.mjs';
 import { notify } from './notify.mjs';
-import { claudeUsual, claudeSwaps } from './ideas-claude.mjs';
+import { claudeUsual, claudeSwaps, claudeStandIn } from './ideas-claude.mjs';
 import { households as allowedHouseholdDocs } from './access.mjs';
 
 // SAINSBURYS_FAKE=1 swaps in a pretend shop, for testing the app end to end.
@@ -216,20 +216,23 @@ async function processOrder({ h, ref }) {
         try {
           await shop.add(uid, line.qty || 1, slotDate);
         } catch (e) {
+          if (e.status !== 400) throw e;
           // A cheaper swap that won't go in: go back to the product it replaced.
-          if (line.swap && e.status === 400) {
+          if (line.swap) {
             Object.assign(line, { uid: line.swap.fromUid, product: line.swap.from }); delete line.swap;
             await shop.add(line.uid, line.qty || 1, slotDate);
             line.result = 'added';
             continue;
           }
-          // A usual product from a past order may have been discontinued: fall back to a search.
-          if (!((line.source === 'list' || line.usual) && e.status === 400 && line.search)) throw e;
-          const hits = (await shop.search(line.search)).filter(p => p.available && String(p.uid) !== String(uid));
-          if (!hits.length) throw e;
-          line.uid = hits[0].uid; line.product = hits[0].name;
-          await shop.add(line.uid, line.qty || 1, slotDate);
-          await log(`${line.name}: the usual one wasn't available, so it's ${hits[0].name}`);
+          // The usual product won't go in (out of stock for this slot, or
+          // discontinued): find the nearest match that keeps what matters
+          // about it (organic, free range, size, fat level...), or leave it out.
+          const alt = await standIn(h, shop, line, uid);
+          if (!alt) throw e;
+          await shop.add(alt.uid, line.qty || 1, slotDate);
+          line.standIn = { from: line.product || line.name, fromUid: String(uid) };
+          Object.assign(line, { uid: String(alt.uid), product: alt.name });
+          await log(`${line.name}: the usual one wasn't available, so it's ${alt.name}`);
         }
         line.result = 'added';
       } catch (e) {
@@ -463,6 +466,22 @@ async function chooseSlot({ h, order, shop, update, log, waitFor }) {
 
 function londonDate(t) {
   return new Date(t).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+}
+
+// Something like the product that wouldn't go in: Sainsbury's search for it,
+// then Claude picks the option that is the same thing (keeping organic, free
+// range, cut, fat level, brand where it matters and a similar size). Without
+// Claude, only a typed list item takes the top search match, as before; a
+// staple or a usual meal product is left out rather than guessed.
+async function standIn(h, shop, line, avoidUid) {
+  const term = line.source === 'staple' || line.usual ? (searchTerms(line.product || line.name) || line.search || line.name) : (line.search || line.name);
+  let hits;
+  try { hits = (await shop.search(term, 12)).filter(p => p.available && String(p.uid) !== String(avoidUid)); } catch { return null; }
+  if (!hits.length) return null;
+  let pick = null;
+  try { pick = await claudeStandIn({ item: line.name, current: line.product || line.name, options: hits.map(p => ({ u: String(p.uid), n: p.name })) }, h.data().notes || ''); } catch (e) { console.log(`Stand-in check failed: ${e.message}`); }
+  if (pick === null) return line.source === 'list' && !line.usual ? hits[0] : null;
+  return hits.find(p => String(p.uid) === pick) || null;
 }
 
 // Meal ingredients get "your usual" product: Claude picks from what the

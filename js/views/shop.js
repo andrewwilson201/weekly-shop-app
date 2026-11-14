@@ -1,10 +1,10 @@
 // Basket: everything going in the shop, from the dinners, the staples due and
 // the list, before it's sent to Sainsbury's.
-import * as S from '../store.js?v=12';
-import { addDays, stapleStatus, AISLES, aisleOf, estimateShop } from '../plan.js?v=12';
-import { icon } from '../ui.js?v=12';
-import { st, esc, money, fmtDay, today, plural, head, section, run, keep, routes, actions } from '../core.js?v=12';
-import { plan, savePlan, activeOrder, stateLabel, flow, shopLines, pickedMeals, startOrder } from '../state.js?v=12';
+import * as S from '../store.js?v=13';
+import { addDays, stapleStatus, AISLES, aisleOf, estimateShop } from '../plan.js?v=13';
+import { icon } from '../ui.js?v=13';
+import { st, esc, money, fmtDay, today, plural, head, section, run, keep, routes, actions } from '../core.js?v=13';
+import { plan, savePlan, activeOrder, stateLabel, flow, shopLines, pickedMeals, startOrder } from '../state.js?v=13';
 
 const MIN_BASKET = 25;
 // Each line has − / + for how many; − at 1 leaves it out (like unticking).
