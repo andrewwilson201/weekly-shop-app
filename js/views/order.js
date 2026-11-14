@@ -32,6 +32,7 @@ function hero(o) {
   if (o.addTo && o.state === 'filling') return ['cart', '', 'Adding to your order', 'Opening the order you booked and adding everything. This takes a minute or two.'];
   if (o.addTo && o.state === 'placed') return ['check', '', 'Order updated', `Your shop is in the order you booked${o.orderNumber ? ` (${esc(o.orderNumber)})` : ''}. Staples, meals and the list have been updated.`];
   if (o.state === 'choose_slot' && o.existing?.length) return ['calendar', 'warn', 'Add to your order, or pick a time', 'You already have a Sainsbury\'s order around then.'];
+  if (o.state === 'needs_you' && o.finishedElsewhere) return ['clock', '', 'Marking it as ordered', 'Updating staples, meals and the list. This takes a few seconds.'];
   if (o.amend && o.state === 'placed') return ['check', '', 'Order updated', 'What you added is in the order, and off the list.'];
   if (o.state === 'need_code') {
     const who = firstName(st.household.codeTo);
@@ -96,6 +97,11 @@ routes.order = () => {
         slots.filter(s => s.date === d).map(s => `<button data-act="slot" data-id="${esc(s.start_time)}" class="${o.slotChoice === s.start_time ? 'on' : ''}" ${o.slotChoice ? 'disabled' : ''}>${fmtTime(s.start_time)}–${fmtTime(s.end_time)}<small>${s.price ? money(s.price) : 'Free'}${s.is_green ? ' · green slot' : ''}</small></button>`).join('') + `</div>`;
     }
     html += `</div>`;
+  }
+  // The helper stopped and it was finished in the Sainsbury's app instead.
+  if (o.state === 'needs_you' && !o.trial && !o.finishedElsewhere) {
+    html += `<div class="card"><b>Finished it in the Sainsbury's app?</b><p class="small muted" style="margin:2px 0 12px">If you ${o.amend || o.addTo ? 'saved the changes' : 'placed the order'} there, tell this app so it counts as ordered: the list, staples and recipes are updated. Nothing is sent to Sainsbury's.</p>
+      <button class="btn primary block" data-act="finishedElsewhere">${icon('check')} I finished it in the Sainsbury's app</button></div>`;
   }
   if (['review', 'placing', 'placed', 'trial_done'].includes(o.state) || (o.basket && ['failed', 'needs_you'].includes(o.state))) html += review(o);
 
@@ -213,8 +219,19 @@ actions.approve = () => {
 };
 actions.cancelOrder = () => {
   const o = curOrder();
+  // The helper has already stopped, so there's nothing to cancel on Sainsbury's: just close it here.
+  if (o.state === 'needs_you') {
+    if (!confirm('Mark this order as not ordered? Nothing changes on Sainsbury\'s, so if the basket or slot are still there, sort them out in the Sainsbury\'s app.')) return;
+    run(() => S.updateH(['orders', o.id], { state: 'cancelled', cancelRequested: S.me(), message: 'Marked as not ordered here. Nothing was changed on Sainsbury\'s.' }));
+    return;
+  }
   if (!confirm(o.amend || o.addTo ? 'Stop adding to the order? Anything added is taken out again and the order stays as it was.' : 'Cancel this order? The slot is released and the basket is left as it is.')) return;
   run(() => S.updateH(['orders', o.id], { cancelRequested: S.me() }));
+};
+actions.finishedElsewhere = () => {
+  const o = curOrder();
+  if (!confirm(`Did you ${o.amend || o.addTo ? 'save the changes' : 'place this order'} in the Sainsbury's app? It'll show here as ordered.`)) return;
+  run(() => S.updateH(['orders', o.id], { finishedElsewhere: { ...S.me(), at: Date.now() } }), 'Marking it as ordered…');
 };
 actions.amendOrder = el => {
   const o = st.orders.find(x => x.id === el.dataset.id);

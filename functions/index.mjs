@@ -14,7 +14,7 @@
 
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import { onDocumentCreated, onDocumentWritten } from 'firebase-functions/v2/firestore';
+import { onDocumentCreated, onDocumentUpdated, onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { defineSecret } from 'firebase-functions/params';
 import { makeJobs } from './shared/worker/jobs.mjs';
@@ -87,6 +87,16 @@ export const startOrder = onDocumentCreated({ region: opts.region, document: 'ho
     console.error('Could not start the order worker', res.status, await res.text().catch(() => ''));
     await snap.ref.update({ message: `The order helper didn't start straight away (GitHub said ${res.status}). GitHub's backup timer may still pick it up in the next few minutes; if not, tap Try again.` });
   }
+});
+
+// "I finished it in the Sainsbury's app" on a stopped order: mark it placed and
+// update staples, meals and the list (worker/jobs.mjs finishElsewhere). Only
+// writes to the database; it never contacts Sainsbury's.
+export const finishedElsewhere = onDocumentUpdated({ region: opts.region, document: 'households/{hid}/orders/{oid}', maxInstances: 2 }, async event => {
+  const before = event.data?.before.data(), after = event.data?.after.data();
+  if (!after?.finishedElsewhere || before?.finishedElsewhere || after.state !== 'needs_you') return;
+  if (!(await isAllowed(db, event.params.hid))) return;
+  await jobs.finishElsewhere(await household(event.params.hid), event.data.after.ref);
 });
 
 // Once a week (Mondays): GitHub switches off a repo's timed workflows after 60
