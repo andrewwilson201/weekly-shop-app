@@ -291,3 +291,23 @@ test('price changes under 5p are ignored', () => {
   assert.equal(priceChange(1.5, 1.53), 0);
   assert.equal(priceChange(undefined, 2), 0);
 });
+
+test('orders booked in the Sainsbury\'s app: upcoming and changeable ones near the day', async () => {
+  const { upcomingOrders, ordersNear } = await import('../js/plan.js');
+  const now = new Date('2026-11-14T08:00:00Z');
+  const raw = [
+    { order_uid: 1, status: 'placed', total: '33.50', slot_start_time: '2026-11-20T09:00:00Z', slot_end_time: '2026-11-20T10:00:00Z' },
+    { order_uid: 2, status: 'delivered', total: '180', slot_start_time: '2026-11-21T09:00:00Z' },
+    { order_uid: 3, status: 'placed', slot_start_time: '2026-11-10T09:00:00Z' },
+    { order_uid: 4, status: 'placed', is_amendable: false, slot_start_time: '2026-11-19T09:00:00Z' },
+    { order_uid: 5, status: 'placed', total: 40, slot_start_time: '2026-12-23T09:00:00Z' },
+    { order_uid: 6, status: 'cancelled', slot_start_time: '2026-11-20T12:00:00Z' },
+  ];
+  const up = upcomingOrders(raw, now);
+  assert.deepEqual(up.map(o => o.orderNumber), ['1', '5']);
+  assert.deepEqual(up[0], { orderNumber: '1', start_time: '2026-11-20T09:00:00Z', end_time: '2026-11-20T10:00:00Z', date: '2026-11-20', total: 33.5 });
+  assert.deepEqual(ordersNear(up, '2026-11-19').map(o => o.orderNumber), ['1']);
+  assert.deepEqual(ordersNear(up, '2026-11-17').map(o => o.orderNumber), []);
+  assert.deepEqual(ordersNear(up, '2026-11-17', true).map(o => o.orderNumber), ['1'], 'a plan marked booked looks a little further');
+  assert.deepEqual(upcomingOrders([{ order_uid: 7, slot_start_time: '2026-11-15T23:30:00Z' }], now)[0].date, '2026-11-15');
+});

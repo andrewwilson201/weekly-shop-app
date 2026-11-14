@@ -1,9 +1,9 @@
 // Settings: the household, notifications, the order helper, and data.
-import * as S from '../store.js?v=9';
-import { iso } from '../plan.js?v=9';
-import { icon, avatar } from '../ui.js?v=9';
-import { st, esc, fmtDay, today, head, section, run, render, toast, hostOf, keep, routes, actions } from '../core.js?v=9';
-import { activeOrder, householdServes, startOrder } from '../state.js?v=9';
+import * as S from '../store.js?v=10';
+import { iso } from '../plan.js?v=10';
+import { icon, avatar } from '../ui.js?v=10';
+import { st, esc, fmtDay, today, head, section, run, render, toast, hostOf, keep, routes, actions } from '../core.js?v=10';
+import { activeOrder, householdServes, startOrder } from '../state.js?v=10';
 
 routes.settings = () => {
   const h = st.household;
@@ -31,7 +31,7 @@ routes.settings = () => {
     <div class="card">${helperStatus(h)}
       <div class="row nowrap" style="gap:12px;padding:14px 0;border-bottom:1px solid var(--line)"><span class="grow"><b>SMS code goes to</b><br><span class="small muted">Whose phone gets Sainsbury's login code. They're the one told when it's needed.</span></span>
         <select data-change="codeTo" aria-label="Who gets the SMS code" style="width:auto;flex:none"><option value="">Not set</option>${Object.entries(h.memberNames || {}).map(([uid, name]) => `<option value="${esc(uid)}"${h.codeTo === uid ? ' selected' : ''}>${esc(name.split(' ')[0])}</option>`).join('')}</select></div>
-      <div style="padding-top:14px"><b>Trial run</b><p class="small muted" style="margin:2px 0 12px">Checks the whole Sainsbury's order works without buying anything: it logs in (you'll need the SMS code), books a slot, fills the basket with the next shop, goes to checkout and reads the total, then stops before Place order. Afterwards it takes out what it added and releases the slot.</p>
+      <div style="padding-top:14px"><b>Trial run</b><p class="small muted" style="margin:2px 0 12px">Checks the whole Sainsbury's order works without buying anything: it logs in (you'll need the SMS code), books a slot (or opens the order you booked in the Sainsbury's app, if the next shop is marked as booked or you pick it), fills the basket with the next shop, goes to checkout and reads the total, then stops before Place order. Afterwards it takes out what it added and releases the slot, or cancels the changes to your booked order.</p>
       ${activeOrder() ? `<a class="btn outline block" href="#/order">An order is running: view it</a>` : `<button class="btn tonal block" data-act="trialOrder">${icon('cart')} Start a trial run</button>`}</div>
       <a class="btn ghost block" href="#/history" style="margin-top:8px">${icon('list')} Order history</a></div>
 

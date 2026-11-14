@@ -1,9 +1,9 @@
 // Next shop: the delivery day and the dinners for the shop being planned.
-import * as S from '../store.js?v=9';
-import { addDays, pickIdeas, awayOn, isIdea, planDate } from '../plan.js?v=9';
-import { icon, tile, avatar } from '../ui.js?v=9';
-import { st, esc, money, fmtDay, today, plural, head, section, empty, run, routes, actions } from '../core.js?v=9';
-import { mealById, plan, planId, savePlan, planOrder, activeOrder, nextDelivery, orderLine, slotText, flow, stillToCook, askRecipe } from '../state.js?v=9';
+import * as S from '../store.js?v=10';
+import { addDays, pickIdeas, awayOn, isIdea, planDate } from '../plan.js?v=10';
+import { icon, tile, avatar } from '../ui.js?v=10';
+import { st, esc, money, fmtDay, today, plural, head, section, empty, run, routes, actions } from '../core.js?v=10';
+import { mealById, plan, planId, savePlan, planOrder, activeOrder, nextDelivery, orderLine, slotText, flow, stillToCook, askRecipe } from '../state.js?v=10';
 
 const NEEDS_YOU = ['need_code', 'choose_slot', 'review', 'needs_you'];
 // "35 mins" on an idea card: from its recipe, or Claude's estimate.
@@ -35,13 +35,20 @@ routes.week = () => {
   const n = Object.keys(picks).length;
   // Delivery day comes first: it's one tap, and it sets which staples are due and which slots are offered.
   html += section('1. Choose a delivery day');
+  // Booked ahead in the Sainsbury's app: the delivery can be up to three weeks out.
+  const ahead = w.booked || (w.deliveryDate && w.deliveryDate > addDays(today(), 7)) ? 21 : 7;
   html += `<div class="days">`;
-  for (let i = 1; i <= 7; i++) {
+  for (let i = 1; i <= ahead; i++) {
     const d = addDays(today(), i);
     const off = awayOn(away, d);
     html += `<button data-act="day" data-id="${d}" class="${w.deliveryDate === d ? 'on' : ''}" ${off ? 'disabled title="Away"' : ''} aria-pressed="${w.deliveryDate === d}"><small>${fmtDay(d, { weekday: 'short' })}</small><b>${fmtDay(d, { day: 'numeric' })}</b><span>${off ? 'Away' : fmtDay(d, { month: 'short' })}</span></button>`;
   }
   html += `</div>`;
+  html += `<label class="card booked row nowrap"><span class="grow"><b>Already booked in the Sainsbury's app?</b>
+    <span class="small muted">${w.booked
+      ? `This shop goes into the order you booked${w.deliveryDate ? ` for ${fmtDay(w.deliveryDate)}` : ''}, instead of a new slot. Anything you added to get over the minimum can come out when you check the total.`
+      : 'Turn this on if you\'ve booked the slot and checked out already. The app adds this shop to that order.'}</span></span>
+    <input type="checkbox" class="switch" data-change="booked" ${w.booked ? 'checked' : ''} aria-label="Already booked in the Sainsbury's app"></label>`;
   html += section('2. Pick your dinners', { right: `<span class="small muted">${w.ideasBy === 'claude' ? 'Ideas by Claude' : 'From your meals'}</span>` });
   w.offered.forEach(id => {
     const m = mealById(id); if (!m) return;
@@ -63,7 +70,7 @@ routes.week = () => {
 
   html += wo
     ? `<div class="actionbar"><div><span class="sum"><b>${wo.state === 'placed' ? 'Ordered' : activeOrder() && NEEDS_YOU.includes(wo.state) ? 'The order needs you' : 'Order in progress'}</b><span>${esc(orderLine(wo))}</span></span><a class="btn primary" href="#/order">View order ${icon('chevron')}</a></div></div>`
-    : `<div class="actionbar"><div><span class="sum"><b>${n ? plural(n, 'dinner') : 'No dinners yet'}</b><span>${w.deliveryDate ? `Delivery ${fmtDay(w.deliveryDate)}` : 'Choose a delivery day'}</span></span>
+    : `<div class="actionbar"><div><span class="sum"><b>${n ? plural(n, 'dinner') : 'No dinners yet'}</b><span>${w.deliveryDate ? `${w.booked ? 'Booked for' : 'Delivery'} ${fmtDay(w.deliveryDate)}` : 'Choose a delivery day'}</span></span>
     <a class="btn primary" href="#/shop">Next: the basket ${icon('chevron')}</a></div></div>`;
   return html;
 };
@@ -90,6 +97,7 @@ actions.pick = el => run(() => {
   return S.updateH(['weeks', planId()], { [`picks.${id}`]: picks[id] ? S.deleteField() : S.me() });
 });
 actions.day = el => run(() => savePlan({ deliveryDate: el.dataset.id }));
+actions.booked = el => run(() => savePlan({ booked: el.checked }), el.checked ? 'This shop will go into the order you booked' : 'A new slot will be booked');
 actions.addIdea = () => { location.hash = '#/meals'; };
 // Put this plan aside (for when the shop was done another way) and start a new one.
 actions.startAfresh = () => {

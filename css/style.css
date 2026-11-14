@@ -512,3 +512,7 @@ div.field .hint { font-weight: 400; color: var(--muted); font-size: 13px; margin
 .away-form { align-items: flex-end; }
 .away-form label.field { flex: 1 1 140px; min-width: 0; margin: 0; }
 .away-form input[type=date] { width: 100%; min-width: 0; }
+
+/* Next shop: "Already booked in the Sainsbury's app?" */
+.card.booked { gap: 14px; align-items: center; cursor: pointer; margin-top: 4px; }
+.card.booked .small { display: block; margin-top: 2px; }

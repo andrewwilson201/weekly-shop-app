@@ -27,6 +27,14 @@ export async function remindCutoff(db, now = new Date()) {
   const tomorrow = addDays(iso(now), 1);
   let sent = 0;
   for (const h of await households(db)) {
+    // A delivery booked in the Sainsbury's app that this shop hasn't gone into yet.
+    const plans = (await h.ref.collection('weeks').where('deliveryDate', '==', tomorrow).get()).docs
+      .filter(d => d.data().booked && !['ordered', 'closed'].includes(d.data().status) && !d.data().reminded);
+    for (const p of plans) {
+      await p.ref.update({ reminded: new Date() });
+      await notify(h, { title: 'Your Sainsbury\'s delivery is tomorrow', body: 'You booked it in the Sainsbury\'s app. Tap to add this shop to it before the cut-off tonight.', link: '#/shop', tag: 'cutoff' });
+      sent++;
+    }
     const orders = (await h.ref.collection('orders').where('deliveryDate', '==', tomorrow).get()).docs
       .filter(d => d.data().state === 'placed' && !d.data().trial && !d.data().amend && !d.data().reminded);
     if (!orders.length) continue;

@@ -102,5 +102,16 @@ globalThis.fetch = realFetch;
   assert(await remindCutoff(db, now) === 0, 'and only once');
 }
 
+// A delivery booked in the Sainsbury's app for tomorrow that the shop hasn't gone into yet.
+{
+  const now = new Date('2026-11-14T18:00:00Z');
+  const booked = h.collection('weeks').doc('2026-11-13');
+  await booked.set({ deliveryDate: '2026-11-15', booked: true });
+  await h.collection('weeks').doc('2026-11-13-2').set({ deliveryDate: '2026-11-15', booked: true, status: 'ordered' });
+  assert(await remindCutoff(db, now) === 1, 'reminder sent for a delivery booked in the Sainsbury\'s app');
+  assert((await booked.get()).data().reminded, 'the plan is marked as reminded');
+  assert(await remindCutoff(db, now) === 0, 'and only once');
+}
+
 console.log('Functions OK');
 process.exit(0);

@@ -1,9 +1,9 @@
 // Order history: every order placed through the app, with spend by month and
 // what the offer swaps saved.
-import * as S from '../store.js?v=9';
-import { icon } from '../ui.js?v=9';
-import { st, esc, money, fmtDay, plural, head, section, empty, render, routes } from '../core.js?v=9';
-import { olderOrders, slotText } from '../state.js?v=9';
+import * as S from '../store.js?v=10';
+import { icon } from '../ui.js?v=10';
+import { st, esc, money, fmtDay, plural, head, section, empty, render, routes } from '../core.js?v=10';
+import { olderOrders, slotText } from '../state.js?v=10';
 
 let loaded = null, loading = false, failed = '';
 function load() {
