@@ -1,9 +1,9 @@
 // Order: one run of the order helper (worker/run.mjs), from the SMS code to
 // the placed order. Also "Add to this order" for a placed one.
-import * as S from '../store.js?v=9';
-import { icon } from '../ui.js?v=9';
-import { st, esc, money, fmtDay, fmtTime, today, plural, head, section, empty, run, render, toast, toMillis, keep, route, arg, routes, actions } from '../core.js?v=9';
-import { DONE_STATES, STEPS, activeOrder, isStale, flow, planId, startOrder, startAmend, slotText, findOrder } from '../state.js?v=9';
+import * as S from '../store.js?v=10';
+import { icon } from '../ui.js?v=10';
+import { st, esc, money, fmtDay, fmtTime, today, plural, head, section, empty, run, render, toast, toMillis, keep, route, arg, routes, actions } from '../core.js?v=10';
+import { DONE_STATES, STEPS, activeOrder, isStale, flow, planId, startOrder, startAmend, slotText, findOrder } from '../state.js?v=10';
 
 const CODE_MINUTES = 10; // worker/run.mjs: how long Sainsbury's code is waited for
 const HERO = {
@@ -28,6 +28,10 @@ function hero(o) {
   if (isStale(o)) return ['alert', 'danger', 'The order helper didn\'t start', `Nothing has happened on Sainsbury's. It isn't started this late, so send it again.`];
   if (o.trial && o.state === 'review') return ['bag', 'warn', 'Check the basket', 'Then tap Check out to try Sainsbury\'s checkout. Nothing is paid.'];
   if (o.amend && o.state === 'review') return ['bag', 'warn', 'Check the changed order', 'Nothing changes until you approve.'];
+  if (o.addTo && o.state === 'review') return ['bag', 'warn', 'Check the order and approve', 'This shop goes into the order you booked. Nothing changes until you approve.'];
+  if (o.addTo && o.state === 'filling') return ['cart', '', 'Adding to your order', 'Opening the order you booked and adding everything. This takes a minute or two.'];
+  if (o.addTo && o.state === 'placed') return ['check', '', 'Order updated', `Your shop is in the order you booked${o.orderNumber ? ` (${esc(o.orderNumber)})` : ''}. Staples, meals and the list have been updated.`];
+  if (o.state === 'choose_slot' && o.existing?.length) return ['calendar', 'warn', 'Add to your order, or pick a time', 'You already have a Sainsbury\'s order around then.'];
   if (o.amend && o.state === 'placed') return ['check', '', 'Order updated', 'What you added is in the order, and off the list.'];
   if (o.state === 'need_code') {
     const who = firstName(st.household.codeTo);
@@ -49,12 +53,15 @@ routes.order = () => {
   // A stopped order shows how far it got (stoppedAt: the step it was on).
   const idx = STEPS.findIndex(s => s[0] === (['failed', 'needs_you'].includes(o.state) && o.stoppedAt ? o.stoppedAt : o.state));
   const [hic, htone, htitle, hsub] = hero(o);
+  const into = o.amend || o.addTo; // adding to an order that's already placed
   const kind = o.trial ? 'Trial order' : o.amend ? 'Adding to the order' : 'Order';
-  const eyebrow = o.trial ? 'Trial run · nothing is paid' : o.amend ? `Sainsbury's order${o.amend.orderNumber ? ` ${esc(o.amend.orderNumber)}` : ''}` : 'Sainsbury\'s order';
+  const eyebrow = o.trial ? `Trial run · nothing is paid${o.addTo ? ` · order ${esc(o.addTo.orderNumber)}` : ''}` : into ? `Sainsbury's order${into.orderNumber ? ` ${esc(into.orderNumber)}` : ''}` : 'Sainsbury\'s order';
   let html = head(`${kind} for ${fmtDay(o.deliveryDate, { weekday: 'long', day: 'numeric', month: 'short' })}`, { eyebrow, sub: `Started by ${esc(o.requestedBy?.name)}${o.slot ? ` · delivery ${slotText(o)}` : ''}` });
   if (o.week === planId() && !o.trial && !o.amend) html += flow('order');
-  if (o.trial && !DONE_STATES.includes(o.state)) html += `<div class="notice info">${icon('info')}<span class="grow"><b>Trial run.</b> It does everything a real order does up to Sainsbury's Place order button, then stops. Afterwards it takes out what it added and releases the slot.</span></div>`;
-  const placedSub = o.state === 'placed' && !o.amend ? `${o.orderNumber ? `Sainsbury's order ${esc(o.orderNumber)}. ` : ''}Staples, meals and the list have been updated.` : hsub;
+  if (o.trial && !DONE_STATES.includes(o.state)) html += `<div class="notice info">${icon('info')}<span class="grow"><b>Trial run.</b> ${o.addTo
+    ? 'It adds this shop to the order you booked and goes to Sainsbury\'s checkout, then stops before saving. Afterwards it takes out what it added, puts back anything you removed and cancels the changes.'
+    : 'It does everything a real order does up to Sainsbury\'s Place order button, then stops. Afterwards it takes out what it added and releases the slot.'}</span></div>`;
+  const placedSub = o.state === 'placed' && !into ? `${o.orderNumber ? `Sainsbury's order ${esc(o.orderNumber)}. ` : ''}Staples, meals and the list have been updated.` : hsub;
   html += `<div class="hero"><div class="status"><span class="dot-lg ${htone}">${icon(hic)}</span><span class="grow"><h3>${htitle}</h3>${placedSub ? `<p class="sub">${placedSub}</p>` : ''}</span></div></div>`;
   if (o.message) html += `<div class="notice ${['failed', 'needs_you'].includes(o.state) || (o.state === 'cancelled' && o.notStarted) ? 'danger' : ''}">${icon('info')}<span class="grow">${esc(o.message)}</span></div>`;
   // Not picked up (GitHub didn't start the helper): one tap sends it again.
@@ -72,7 +79,17 @@ routes.order = () => {
   if (o.state === 'choose_slot') {
     const slots = (o.slots || []);
     const days = [...new Set(slots.map(s => s.date))];
-    html += `<div class="card">${o.slotChoice ? '<p class="small muted">Booking it…</p>' : ''}`;
+    // Orders already booked in the Sainsbury's app around the day: add this shop to one.
+    if (o.existing?.length) {
+      html += section('Already booked') + `<div class="card flush"><ul class="list">` + o.existing.map(x => {
+        const id = `order:${x.orderNumber}`;
+        return `<li><span class="grow"><span class="name">${fmtDay(x.date, { weekday: 'long', day: 'numeric', month: 'short' })}${x.start_time ? `, ${fmtTime(x.start_time)}${x.end_time ? `–${fmtTime(x.end_time)}` : ''}` : ''}</span>
+          <span class="meta">Order ${esc(x.orderNumber)}${x.total ? ` · ${money(x.total)} so far` : ''}</span></span>
+          <button class="btn small primary" data-act="slot" data-id="${esc(id)}" ${o.slotChoice ? 'disabled' : ''}>${o.slotChoice === id ? 'Opening…' : 'Add to this order'}</button></li>`;
+      }).join('') + `</ul><p class="tiny muted" style="margin:0;padding:0 16px 12px">Anything you put in to get over the minimum shows on the next screen, where you can take it out.</p></div>`;
+      html += section('Or book a new slot');
+    }
+    html += `<div class="card">${o.slotChoice && !o.slotChoice.startsWith('order:') ? '<p class="small muted">Booking it…</p>' : ''}`;
     if (!slots.length) html += `<p class="muted">No free slots around that day.</p>`;
     for (const d of days) {
       html += `<div class="slot-day">${fmtDay(d, { weekday: 'long', day: 'numeric', month: 'short' })}</div><div class="slots">` +
@@ -124,8 +141,9 @@ function review(o) {
   const extra = items.filter(i => i.uid != null && !ours.has(String(i.uid)));
   const removing = new Set((o.removeExtras || []).map(String));
   if (extra.length) {
-    html += section(o.amend ? 'Already in the order' : 'Already in the basket', { count: extra.length, right: `<span class="price">${money(extra.reduce((t, i) => t + (i.total || 0), 0))}</span>` });
-    html += `<div class="card flush">${o.amend ? '' : `<p class="small muted" style="margin:0;padding:12px 16px 0">These were in your Sainsbury's basket before and will be ordered too. Remove any you don't want.</p>`}
+    html += section(o.amend || o.addTo ? 'Already in the order' : 'Already in the basket', { count: extra.length, right: `<span class="price">${money(extra.reduce((t, i) => t + (i.total || 0), 0))}</span>` });
+    const why = o.amend ? '' : o.addTo ? 'What was in the order when you booked it. Take out anything you only added to get over the minimum.' : 'These were in your Sainsbury\'s basket before and will be ordered too. Remove any you don\'t want.';
+    html += `<div class="card flush">${why ? `<p class="small muted" style="margin:0;padding:12px 16px 0">${why}</p>` : ''}
       <ul class="list compact">${extra.map(i => `<li><span class="grow"><span class="name">${esc(i.name)}${i.qty > 1 ? `<span class="qty">×${i.qty}</span>` : ''}</span>${i.change ? `<span class="meta${i.change > 0 ? ' up' : ''}">${changeText(i.change)}</span>` : ''}</span><span class="price">${money(i.total)}</span>
         ${canChange && !o.amend ? `<button class="btn small outline" data-act="removeExtra" data-id="${esc(i.uid)}" ${removing.has(String(i.uid)) ? 'disabled' : ''}>${removing.has(String(i.uid)) ? 'Removing…' : 'Remove'}</button>` : ''}</li>`).join('')}</ul></div>`;
   }
@@ -144,12 +162,13 @@ function review(o) {
     <div class="total"><span>Total</span><span class="price">${money(o.total)}</span></div>
     ${o.state === 'review' ? `<p class="tiny muted" style="margin:8px 0 0">Changed something in the Sainsbury's app? Tap Refresh to read the basket again.</p>` : ''}
     ${o.card ? `<p class="small muted" style="margin:8px 0 0">${o.trial ? `Sainsbury's checkout showed ${money(o.checkoutTotal)} with ${esc(o.card)}. Nothing was paid.` : `Paid with ${esc(o.card)} on delivery day. Substitutions off.`}</p>` : ''}</div>
-    <details class="disclosure" data-toggle="basketOpen" ${keep.basketOpen ? 'open' : ''} style="border-top:1px solid var(--line)"><summary>${icon('bag')} Everything in the ${o.amend ? 'order' : 'basket'} <span class="count">${items.length}</span></summary>
+    <details class="disclosure" data-toggle="basketOpen" ${keep.basketOpen ? 'open' : ''} style="border-top:1px solid var(--line)"><summary>${icon('bag')} Everything in the ${o.amend || o.addTo ? 'order' : 'basket'} <span class="count">${items.length}</span></summary>
     <ul class="list compact">` + items.map(i => `<li><span class="grow"><span class="name">${esc(i.name)}${i.qty > 1 ? `<span class="qty">×${i.qty}</span>` : ''}</span>${i.offer ? `<span class="meta" style="color:var(--warm)">${esc(i.offer)}</span>` : ''}${i.change ? `<span class="meta${i.change > 0 ? ' up' : ''}">${changeText(i.change)}</span>` : ''}${swaps.some(l => String(l.uid) === String(i.uid)) ? `<span class="meta">Swapped in for an offer</span>` : ''}</span><span class="price">${money(i.total)}</span></li>`).join('') + `</ul></details></div>`;
   if (o.state === 'review') {
     const switching = swaps.some(l => asked.has(l.key) && !l.swap.failed) || refreshing || extra.some(i => removing.has(String(i.uid)));
-    const label = o.approvedBy ? (o.trial ? 'Checking out…' : o.amend ? 'Updating…' : 'Placing…') : switching ? 'Updating the total…' : o.trial ? `Check out (trial, ${money(o.total)})` : o.amend ? `Update order, ${money(o.total)}` : `Approve ${money(o.total)}`;
-    const note = o.trial ? 'Goes to Sainsbury\'s checkout and reads the total, but doesn\'t press Place order. Nothing is paid.' : o.amend ? 'Approving saves the changes to your Sainsbury\'s order.' : 'Approving places the order with Sainsbury\'s. You can still add to it here until the evening before delivery.';
+    const into = o.amend || o.addTo;
+    const label = o.approvedBy ? (o.trial ? 'Checking out…' : into ? 'Updating…' : 'Placing…') : switching ? 'Updating the total…' : o.trial ? `Check out (trial, ${money(o.total)})` : into ? `Update order, ${money(o.total)}` : `Approve ${money(o.total)}`;
+    const note = o.trial ? `Goes to Sainsbury's checkout and reads the total, but doesn't ${o.addTo ? 'save the changes' : 'press Place order'}. Nothing is paid.` : into ? 'Approving saves the changes to your Sainsbury\'s order.' : 'Approving places the order with Sainsbury\'s. You can still add to it here until the evening before delivery.';
     html += `<div class="actionbar col"><div><p class="small muted" style="margin:0 0 10px">${note}</p>
       <div class="row nowrap"><button class="btn outline danger" data-act="cancelOrder">Cancel</button>
       <button class="btn primary lg" style="flex:1" data-act="approve" ${o.approvedBy || switching ? 'disabled' : ''}>${label}</button></div></div></div>`;
@@ -189,12 +208,12 @@ actions.removeExtra = el => {
 };
 actions.approve = () => {
   const o = curOrder();
-  if (!confirm(o.trial ? `Go to Sainsbury's checkout for ${money(o.total)}? This is a trial: it won't place the order.` : o.amend ? `Update the order to ${money(o.total)}?` : `Place the order for ${money(o.total)}?`)) return;
+  if (!confirm(o.trial ? `Go to Sainsbury's checkout for ${money(o.total)}? This is a trial: it won't place the order.` : o.amend || o.addTo ? `Update the order to ${money(o.total)}?` : `Place the order for ${money(o.total)}?`)) return;
   run(() => S.updateH(['orders', o.id], { approvedBy: S.me(), approvedTotal: o.total }));
 };
 actions.cancelOrder = () => {
   const o = curOrder();
-  if (!confirm(o.amend ? 'Stop adding to the order? Anything added is taken out again.' : 'Cancel this order? The slot is released and the basket is left as it is.')) return;
+  if (!confirm(o.amend || o.addTo ? 'Stop adding to the order? Anything added is taken out again and the order stays as it was.' : 'Cancel this order? The slot is released and the basket is left as it is.')) return;
   run(() => S.updateH(['orders', o.id], { cancelRequested: S.me() }));
 };
 actions.amendOrder = el => {

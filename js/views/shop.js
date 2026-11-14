@@ -1,10 +1,10 @@
 // Basket: everything going in the shop, from the dinners, the staples due and
 // the list, before it's sent to Sainsbury's.
-import * as S from '../store.js?v=9';
-import { addDays, stapleStatus, AISLES, aisleOf, estimateShop } from '../plan.js?v=9';
-import { icon } from '../ui.js?v=9';
-import { st, esc, money, fmtDay, today, plural, head, section, run, keep, routes, actions } from '../core.js?v=9';
-import { plan, savePlan, activeOrder, stateLabel, flow, shopLines, pickedMeals, startOrder } from '../state.js?v=9';
+import * as S from '../store.js?v=10';
+import { addDays, stapleStatus, AISLES, aisleOf, estimateShop } from '../plan.js?v=10';
+import { icon } from '../ui.js?v=10';
+import { st, esc, money, fmtDay, today, plural, head, section, run, keep, routes, actions } from '../core.js?v=10';
+import { plan, savePlan, activeOrder, stateLabel, flow, shopLines, pickedMeals, startOrder } from '../state.js?v=10';
 
 const MIN_BASKET = 25;
 // Each line has − / + for how many; − at 1 leaves it out (like unticking).
@@ -48,11 +48,12 @@ routes.shop = () => {
   }
   // About what it'll cost, from the prices paid last time (meta/prices).
   const est = estimateShop(lines, st.prices);
-  const low = lines.length && (est.unknown === 0 ? est.total < MIN_BASKET : est.known === 0 && lines.length < 6);
+  // An order already booked is over the minimum with or without this shop.
+  const low = !w?.booked && lines.length && (est.unknown === 0 ? est.total < MIN_BASKET : est.known === 0 && lines.length < 6);
   if (low) html += `<div class="notice warn" style="margin-top:12px">${icon('alert')}<span class="grow"><b>This looks under £${MIN_BASKET}</b><br>Sainsbury's has a minimum basket of £${MIN_BASKET} for delivery, so the order may not go through. Add a few things, or leave it for a day or two.</span></div>`;
   const about = est.known ? `About ${money(est.total)}${est.unknown ? `, plus ${est.unknown} not priced yet` : ''}` : 'You approve the total before paying';
   html += `<div class="actionbar"><div><span class="sum"><b>${plural(lines.length, 'item')}</b><span>${about}</span></span>
-    <button class="btn primary" data-act="order" ${w?.deliveryDate && lines.length ? '' : 'disabled'}>${icon('cart')} Send to Sainsbury's</button></div></div>`;
+    <button class="btn primary" data-act="order" ${w?.deliveryDate && lines.length ? '' : 'disabled'}>${icon('cart')} ${w?.booked ? 'Add to my Sainsbury\'s order' : 'Send to Sainsbury\'s'}</button></div></div>`;
   return html;
 };
 // Rows under aisle subheadings, the way the shop is laid out.

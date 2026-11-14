@@ -1,9 +1,9 @@
 // What the screens work out from the live state: the plan for the next shop,
 // its order, the shop lines, the dinners to cook.
-import * as S from './store.js?v=9';
-import { iso, addDays, buildShop, stapleStatus, matchUsual, toCook, currentPlanId, planCmp } from './plan.js?v=9';
-import { icon } from './ui.js?v=9';
-import { st, fmtDay, fmtTime, money, today, run, toMillis } from './core.js?v=9';
+import * as S from './store.js?v=10';
+import { iso, addDays, buildShop, stapleStatus, matchUsual, toCook, currentPlanId, planCmp } from './plan.js?v=10';
+import { icon } from './ui.js?v=10';
+import { st, fmtDay, fmtTime, money, today, run, toMillis } from './core.js?v=10';
 
 export const mealById = id => st.meals.find(m => m.id === id);
 
@@ -90,6 +90,8 @@ export const startOrder = trial => run(async () => {
   await S.addH(['orders'], {
     week: planId(), deliveryDate: w.deliveryDate, state: 'requested', lines, skippedStaples: trial ? [] : skippedStaples, meals: trial ? [] : Object.keys(w.picks || {}),
     requestedBy: S.me(), createdAt: S.serverTimestamp(), log: [], ...(trial ? { trial: true } : {}),
+    // Booked in the Sainsbury's app already: the worker adds to that order instead of booking a slot.
+    ...(w.booked ? { booked: true } : {}),
   });
   if (!trial && !plan()) await savePlan({ deliveryDate: w.deliveryDate });
   location.hash = '#/order';

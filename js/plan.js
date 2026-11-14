@@ -420,3 +420,23 @@ export function priceChange(was, now) {
   const d = Math.round((now - was) * 100) / 100;
   return Math.abs(d) >= 0.05 ? d : 0;
 }
+
+// ---------- orders booked in the Sainsbury's app ----------
+// Sainsbury's order list (/order/v1/order): keep the ones still to come that
+// can still be changed, as { orderNumber, start_time, end_time, date, total }.
+// Fields seen on the real site: order_uid, status, total, slot_start_time,
+// slot_end_time. A status that sounds finished, or an explicit "can't amend",
+// rules an order out.
+export function upcomingOrders(raw = [], now = new Date()) {
+  return raw
+    .filter(o => o?.order_uid && o.slot_start_time && new Date(o.slot_start_time) > now)
+    .filter(o => !/cancel|deliver|complete|picked|refund|dispatch|transit/i.test(String(o.status || '')) && o.is_amendable !== false && o.can_amend !== false)
+    .map(o => ({ orderNumber: String(o.order_uid), start_time: o.slot_start_time, end_time: o.slot_end_time || '', date: iso(o.slot_start_time), total: Number(o.total) || 0 }))
+    .sort((a, b) => a.start_time.localeCompare(b.start_time));
+}
+// The ones worth offering for a shop delivering on `day`: that day or either
+// side. A plan marked "already booked" also looks a little further out, in case
+// the day in the app is a little off.
+export function ordersNear(list = [], day, booked = false) {
+  return list.filter(o => Math.abs(daysBetween(day, o.date)) <= (booked ? 3 : 1));
+}

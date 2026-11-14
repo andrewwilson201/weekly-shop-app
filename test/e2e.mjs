@@ -431,6 +431,67 @@ await a.goto(`${BASE}#/settings`);
   assert(data.meals?.length > 5 && data.orders?.length >= 2 && !('devices' in data), 'Download your data gives everything as one file');
 }
 
+// Booked ahead in the Sainsbury's app (with a placeholder to pass the minimum):
+// the next shop is marked "already booked", and a trial run adds to that order
+// instead of booking a slot, with the placeholder taken out on the review screen.
+{
+  await a.goto(`${BASE}#/week`);
+  await a.waitForSelector('button:has-text("Pick from our meals now")');
+  await a.click('button:has-text("Pick from our meals now")');
+  await a.waitForSelector('.meal');
+  await a.click('.meal >> nth=0');
+  await a.click('.days button >> nth=1');
+  await a.click('label.booked');
+  await a.waitForSelector('text=This shop goes into the order you booked');
+  assert(await a.locator('.days button').count() === 21, 'a booked delivery can be up to three weeks ahead');
+  await a.screenshot({ path: `${SHOTS}/22-booked-ahead.png`, fullPage: true });
+  await a.goto(`${BASE}#/shop`);
+  await a.waitForSelector('button:has-text("Add to my Sainsbury\'s order")');
+  assert(true, 'the basket sends into the booked order');
+  await a.screenshot({ path: `${SHOTS}/23-booked-basket.png`, fullPage: true });
+  await a.goto(`${BASE}#/settings`);
+  await a.click('button:has-text("Start a trial run")');
+  await a.waitForSelector('text=Trial run · nothing is paid');
+  const w4 = spawn(process.execPath, ['worker/run.mjs'], { env: { ...process.env, FAKE_BOOKED: '1', SAINSBURYS_FAKE: '1', CLAUDE_FAKE: '1', SAINSBURYS_EMAIL: 'x', SAINSBURYS_PASSWORD: 'y', FIRESTORE_EMULATOR_HOST: 'localhost:8081', WORKER_MINUTES: '5' }, stdio: 'inherit' });
+  const w4Done = new Promise(r => w4.on('exit', r));
+  await a.waitForSelector('input.code', { timeout: 30000 });
+  await a.fill('input.code', '123456'); await a.click('text=Send code');
+  await a.waitForSelector('text=Already in the order', { timeout: 30000 });
+  assert(await a.isVisible('text=Take out anything you only added to get over the minimum'), 'the booked order opens without choosing a slot');
+  await a.screenshot({ path: `${SHOTS}/24-booked-review.png`, fullPage: true });
+  await a.click('li:has-text("placeholder kitchen roll") button:has-text("Remove")');
+  // (the Details log mentions it too, so look for the section going)
+  await a.waitForSelector('text=Already in the order', { state: 'detached', timeout: 30000 });
+  assert(true, 'the placeholder is taken out of the order');
+  await a.waitForSelector('button:has-text("Check out (trial"):not([disabled])', { timeout: 30000 });
+  await a.click('button:has-text("Check out (trial")');
+  await a.waitForSelector('h3:has-text("Trial finished")', { timeout: 30000 });
+  assert(await a.isVisible('text=your order is as it was'), 'a trial on a booked order cancels the changes');
+  await w4Done;
+}
+// Without "already booked", an order found near the day is offered next to the slots.
+{
+  await a.goto(`${BASE}#/week`);
+  await a.click('label.booked');
+  await a.waitForSelector('text=Turn this on if you');
+  await a.goto(`${BASE}#/settings`);
+  await a.click('button:has-text("Start a trial run")');
+  await a.waitForSelector('text=Trial run · nothing is paid');
+  const w5 = spawn(process.execPath, ['worker/run.mjs'], { env: { ...process.env, FAKE_BOOKED: '1', SAINSBURYS_FAKE: '1', CLAUDE_FAKE: '1', SAINSBURYS_EMAIL: 'x', SAINSBURYS_PASSWORD: 'y', FIRESTORE_EMULATOR_HOST: 'localhost:8081', WORKER_MINUTES: '5' }, stdio: 'inherit' });
+  const w5Done = new Promise(r => w5.on('exit', r));
+  await a.waitForSelector('input.code', { timeout: 30000 });
+  await a.fill('input.code', '123456'); await a.click('text=Send code');
+  await a.waitForSelector('text=Or book a new slot', { timeout: 30000 });
+  assert(await a.isVisible('text=Order 1000000002'), 'an order booked in the Sainsbury\'s app is offered alongside the slots');
+  await a.screenshot({ path: `${SHOTS}/25-booked-or-slot.png`, fullPage: true });
+  await a.click('button:has-text("Add to this order")');
+  await a.waitForSelector('text=Already in the order', { timeout: 30000 });
+  await a.click('button.btn.outline.danger[data-act=cancelOrder]');
+  await a.waitForSelector('h3:has-text("Cancelled")', { timeout: 30000 });
+  await w5Done;
+  assert(true, 'adding to a booked order can be cancelled');
+}
+
 // Holiday mode
 await a.goto(`${BASE}#/settings`);
 const d = n => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);

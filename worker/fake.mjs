@@ -47,10 +47,24 @@ export class FakeSainsburys {
     it.quantity -= quantity; it.subtotal_price = 2.5 * it.quantity;
     if (it.quantity <= 0) this.items.splice(i, 1);
   }
-  async orders() { return []; }
+  // FAKE_BOOKED=1: an order booked in the Sainsbury's app for the day after
+  // tomorrow, with one placeholder item to get over the minimum.
+  bookedSlot() {
+    const start = new Date(Date.now() + 2 * 864e5); start.setUTCHours(9, 0, 0, 0);
+    return { start_time: start.toISOString().replace('.000', ''), end_time: new Date(start.getTime() + 36e5).toISOString().replace('.000', '') };
+  }
+  async orders() {
+    if (!process.env.FAKE_BOOKED) return [];
+    const s = this.bookedSlot();
+    return [{ order_uid: '1000000002', status: 'placed', total: '33.50', slot_start_time: s.start_time, slot_end_time: s.end_time }];
+  }
   // Adding to a placed order: the basket opens with the order's items in it.
   async startAmend(orderNumber) {
     if (!orderNumber) throw new Error('No order number to change.');
+    if (orderNumber === '1000000002') {
+      this.items.push({ quantity: 1, subtotal_price: 26, product: { sku: 'p-placeholder', name: 'placeholder kitchen roll 24 pack' }, promotions: [] });
+      return { slotDate: this.bookedSlot().start_time.slice(0, 10), slot: this.bookedSlot() };
+    }
     // An order being changed already has everything in it, so it's over the minimum.
     this.items.push({ quantity: 1, subtotal_price: 60, product: { sku: 'p-in-the-order', name: 'something already in the order' }, promotions: [] });
     const start = new Date(Date.now() + 864e5); start.setUTCHours(8, 0, 0, 0);
