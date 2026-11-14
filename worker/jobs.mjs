@@ -237,7 +237,7 @@ async function afterPlaced(h, order, lines, delivery) {
   const bought = new Map();
   for (const l of lines) {
     if (l.result !== 'added') continue;
-    const was = l.swap?.fromUid || l.uid;
+    const was = l.swap?.fromUid || l.standIn?.fromUid || l.uid;
     const id = l.source === 'staple' ? l.key.slice(7) : was && staples.has(String(was)) ? String(was) : null;
     if (id && staples.has(id)) bought.set(id, (bought.get(id) || 0) + (l.qty || 1));
     if (l.source === 'list' && l.listId) b.delete(h.ref.collection('list').doc(l.listId));
@@ -256,7 +256,9 @@ async function afterPlaced(h, order, lines, delivery) {
     const [, id, ...rest] = l.key.split(':'); const item = rest.join(':');
     if (!mealPicks.has(id)) mealPicks.set(id, new Map());
     // A cheaper swap doesn't replace the usual: it's checked again each week.
-    mealPicks.get(id).set(item, l.swap ? { uid: l.swap.fromUid, product: l.swap.from } : { uid: l.uid, product: l.product });
+    // Nor does a stand-in for one that was out of stock.
+    const usual = l.swap ? { uid: l.swap.fromUid, product: l.swap.from } : l.standIn ? { uid: l.standIn.fromUid, product: l.standIn.from } : { uid: l.uid, product: l.product };
+    mealPicks.get(id).set(item, usual);
   }
   for (const [id, picks] of mealPicks) {
     const ref = h.ref.collection('meals').doc(id);
@@ -268,7 +270,17 @@ async function afterPlaced(h, order, lines, delivery) {
   // Everything bought joins the products list, so typed list items find "your usual".
   const pref = h.ref.collection('meta').doc('products');
   let products = (await pref.get()).data()?.items || [];
-  for (const l of lines) if (l.result === 'added' && l.uid) products = l.swap ? recordBought(products, l.swap.fromUid, l.swap.from, delivery) : recordBought(products, l.uid, l.product || l.name, delivery);
+  // An offer swap or a stand-in for something out of stock is logged as the
+  // usual one, so a one-off doesn't become "the usual" next time. Each product
+  // counts once per order, even when two dinners both needed it.
+  const seen = new Set();
+  for (const l of lines) {
+    if (l.result !== 'added' || !l.uid) continue;
+    const [uid, name] = l.swap ? [l.swap.fromUid, l.swap.from] : l.standIn ? [l.standIn.fromUid, l.standIn.from] : [l.uid, l.product || l.name];
+    if (seen.has(String(uid))) continue;
+    seen.add(String(uid));
+    products = recordBought(products, uid, name, delivery);
+  }
   b.set(pref, { items: products }, { merge: true });
   await b.commit();
 }

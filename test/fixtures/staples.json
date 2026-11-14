@@ -86,6 +86,12 @@
    "rule": "suggest",
    "quantity": 1,
    "every_days": 14
+  },
+  {
+   "product_uid": "unavailable-butter",
+   "name": "Sainsbury's Organic salted butter 250g",
+   "rule": "every_week",
+   "quantity": 1
   }
  ]
 }

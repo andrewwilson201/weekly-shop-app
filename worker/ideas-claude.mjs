@@ -286,6 +286,32 @@ The household's own notes come first: anything they say to always buy, or never 
   return Object.fromEntries((out.lines || []).filter(l => ok.has(l.key)).map(l => [l.key, (l.same || []).map(String).filter(u => ok.get(l.key).has(u))]));
 }
 
+// A stand-in for a product that won't go in the basket (out of stock for the
+// slot, or discontinued): which of the shop's search results is the same
+// thing. Returns a uid, "" when none of them will do, or null without a key.
+const STANDIN_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['uid'],
+  properties: { uid: { type: 'string', description: 'u of the option that is the same thing, or "" if none is' } },
+};
+export async function claudeStandIn(ask, notes = '') {
+  if (!ask.options?.length) return '';
+  if (process.env.CLAUDE_FAKE) return ask.options[0].u;
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const response = await new Anthropic().beta.messages.create({
+    model: MODEL,
+    max_tokens: 4000,
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: STANDIN_SCHEMA } },
+    system: `You help fill a family's Sainsbury's basket. The product they usually buy ("current") can't be added this time, so pick the option from the shop's search results that is the closest stand-in. It must be the same kind of product for the same use and keep every quality the current one has: organic stays organic, free range stays free range, higher welfare, British, MSC stay; same cut and form (breast fillets not thighs, fresh not frozen or long life); same fat level, flavour and dietary type (semi skimmed stays semi skimmed, lactose free stays lactose free). A similar pack size is best (two smaller packs are not an option here, so pick the nearest size). Keep the brand where it matters. The household's own notes come first. If none of the options will do, return "".`,
+    messages: [{ role: 'user', content: `${notes ? `Household notes:\n${notes}\n\n` : ''}Item (JSON):\n${JSON.stringify(ask)}` }],
+  });
+  if (response.stop_reason === 'refusal' || response.stop_reason === 'max_tokens') throw new Error(`Claude stopped: ${response.stop_reason}`);
+  const out = JSON.parse(response.content.filter(b => b.type === 'text').map(b => b.text).join(''));
+  const uid = String(out.uid || '');
+  return ask.options.some(o => o.u === uid) ? uid : '';
+}
+
 // A recipe to cook from, for a meal whose page has no method (or that has no
 // page: Claude's own dishes, starter meals, ones typed in by name). Written for
 // the household, using what the shop buys for it. Returns null with no key.
