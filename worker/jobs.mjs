@@ -270,7 +270,17 @@ async function afterPlaced(h, order, lines, delivery) {
   // Everything bought joins the products list, so typed list items find "your usual".
   const pref = h.ref.collection('meta').doc('products');
   let products = (await pref.get()).data()?.items || [];
-  for (const l of lines) if (l.result === 'added' && l.uid) products = l.swap ? recordBought(products, l.swap.fromUid, l.swap.from, delivery) : recordBought(products, l.uid, l.product || l.name, delivery);
+  // An offer swap or a stand-in for something out of stock is logged as the
+  // usual one, so a one-off doesn't become "the usual" next time. Each product
+  // counts once per order, even when two dinners both needed it.
+  const seen = new Set();
+  for (const l of lines) {
+    if (l.result !== 'added' || !l.uid) continue;
+    const [uid, name] = l.swap ? [l.swap.fromUid, l.swap.from] : l.standIn ? [l.standIn.fromUid, l.standIn.from] : [l.uid, l.product || l.name];
+    if (seen.has(String(uid))) continue;
+    seen.add(String(uid));
+    products = recordBought(products, uid, name, delivery);
+  }
   b.set(pref, { items: products }, { merge: true });
   await b.commit();
 }

@@ -228,11 +228,12 @@ async function processOrder({ h, ref }) {
           // discontinued): find the nearest match that keeps what matters
           // about it (organic, free range, size, fat level...), or leave it out.
           const alt = await standIn(h, shop, line, uid);
+          line.refused = e.detail || '';
           if (!alt) throw e;
           await shop.add(alt.uid, line.qty || 1, slotDate);
           line.standIn = { from: line.product || line.name, fromUid: String(uid) };
           Object.assign(line, { uid: String(alt.uid), product: alt.name });
-          await log(`${line.name}: the usual one wasn't available, so it's ${alt.name}`);
+          await log(`${line.name}: the usual one wasn't available${e.detail ? ` (Sainsbury's said: ${e.detail})` : ''}, so it's ${alt.name}`);
         }
         line.result = 'added';
       } catch (e) {
