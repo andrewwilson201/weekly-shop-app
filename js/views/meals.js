@@ -1,9 +1,9 @@
 // Meals: the household's dinners, recipe links, and the meal editor.
-import * as S from '../store.js?v=13';
-import { isIdea } from '../plan.js?v=13';
-import { icon, tile, MEAL_CATEGORIES, mealCategory, autoCategory, categoryTile } from '../ui.js?v=13';
-import { st, esc, fmtDay, plural, head, section, empty, run, render, keep, resetKeep, arg, openCats, routes, actions, hooks } from '../core.js?v=13';
-import { mealById, plan, savePlan } from '../state.js?v=13';
+import * as S from '../store.js?v=14';
+import { isIdea, kidsNote } from '../plan.js?v=14';
+import { icon, tile, MEAL_CATEGORIES, mealCategory, autoCategory, categoryTile } from '../ui.js?v=14';
+import { st, esc, fmtDay, plural, head, section, empty, run, render, keep, resetKeep, arg, openCats, routes, actions, hooks } from '../core.js?v=14';
+import { mealById, plan, savePlan } from '../state.js?v=14';
 
 export const libTabs = now => `<div class="seg" role="tablist">${[['meals', 'Meals'], ['staples', 'Staples']].map(([r, l]) => `<a href="#/${r}" role="tab" class="${r === now ? 'on' : ''}" aria-selected="${r === now}">${l}</a>`).join('')}</div>`;
 routes.meals = () => {
@@ -23,7 +23,7 @@ routes.meals = () => {
   html += `<div class="search" style="margin-bottom:10px">${icon('search')}<input type="search" placeholder="Search meals" data-keep="mealSearch" data-filter="mealList" aria-label="Search meals"></div>`;
   // Grouped by category, each collapsed until tapped, so a long list stays short.
   const row = m => `<li class="link-row" data-name="${esc(m.name.toLowerCase())}">${tile(m, 'sm')}<a href="#/meal/${m.id}" class="grow">
-      <span class="name">${esc(m.name)}</span><span class="meta">${plural((m.ingredients || []).length, 'ingredient')}${m.ingredientsBy === 'claude' ? ' (from Claude)' : ''}${m.timesChosen ? ` · picked ${m.timesChosen}×` : ''}${m.lastChosen ? `, last ${fmtDay(m.lastChosen)}` : ''}</span></a>
+      <span class="name">${esc(m.name)}</span><span class="meta">${plural((m.ingredients || []).length, 'ingredient')}${m.ingredientsBy === 'claude' ? ' (from Claude)' : ''}${m.timesChosen ? ` · picked ${m.timesChosen}×` : ''}${m.lastChosen ? `, last ${fmtDay(m.lastChosen)}` : ''}</span>${kidsNote(m) ? `<span class="meta kids">${icon('alert')} ${esc(kidsNote(m, { short: true }))}</span>` : ''}</a>
       ${!inWeek.has(m.id) ? `<button class="btn small outline" data-act="offer" data-id="${m.id}">Add to next shop</button>` : '<span class="pill ok">In the next shop\'s ideas</span>'}</li>`;
   html += `<div id="mealList" class="cat-list">`;
   for (const [key, label] of MEAL_CATEGORIES) {
@@ -107,6 +107,7 @@ routes.meal = () => {
     <form class="card" data-form="saveMeal">
       <label class="field">Name<input type="text" name="name" value="${esc(m.name)}" required data-keep="mealName"></label>
       ${m.source ? `<p class="small muted">${icon('link')} From <a href="${esc(m.source)}" target="_blank" rel="noopener">${esc(m.source.replace(/^https?:\/\/(www\.)?/, '').split('/')[0])}</a></p>` : ''}
+      ${kidsNote(m) ? `<div class="notice warn">${icon('alert')}<span class="grow">${esc(kidsNote(m))}</span></div>` : ''}
       ${arg === 'new' ? '' : `<p class="small"><a href="#/recipe/${esc(m.id)}">${icon('book')} View the recipe and method</a></p>`}
       <label class="field">Category<select name="category" data-keep="mealCat">
         <option value="">Automatic${m.name ? ` (${MEAL_CATEGORIES.find(c => c[0] === autoCategory(m))[1]})` : ''}</option>

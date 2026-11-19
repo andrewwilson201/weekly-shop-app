@@ -81,7 +81,7 @@ const SCHEMA = {
 
 const SYSTEM = `You plan the weekly dinners for a family's online Sainsbury's shop. Each week you offer 10 dinner ideas; the family picks about 5.
 
-Learn from their history: suggest dishes like the ones they pick, and fewer like the ones they keep passing over. After cooking a dinner they say whether they'd make it again (after_cooking in the library): never offer a dish whose latest answer is "would NOT make again", treat their notes (for example "too spicy for the kids") as guidance for new dishes, and favour dishes they'd make again. Offer a few of the household's favourites, but don't repeat anything they had in the last two weeks.
+Learn from their history: suggest dishes like the ones they pick, and fewer like the ones they keep passing over. After cooking a dinner they say whether they'd make it again (after_cooking in the library): never offer a dish whose latest answer is "would NOT make again", treat their notes (for example "too spicy for the kids") as guidance for new dishes, and favour dishes they'd make again. They also say whether the children ate it (kids in the library: the dates the kids refused it or ate it). A refusal does NOT rule a dish out: keep offering it like any other, but don't put more than 2 dishes the kids last refused in the 10, and when you do offer one, say in its reason how to make it go down better with the kids (for example sauce on the side, milder spice, or a familiar side). For new dishes, lean towards the kinds of food the kids eat. Offer a few of the household's favourites, but don't repeat anything they had in the last two weeks.
 
 Variety matters as much as taste. These rules are firm:
 - No more than ${MAX_PER_PROTEIN} of the 10 share a main protein (chicken, beef, pork, lamb, turkey, fish, seafood, vegetarian or vegan; vegetarian and vegan count together).
@@ -118,6 +118,8 @@ export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '
     id: m.id, name: m.name, tags: m.tags || [], times_picked: m.timesChosen || 0, last_picked: m.lastChosen || null,
     // "Would you make it again?" answers after cooking, newest last.
     ...((m.verdicts || []).length ? { after_cooking: m.verdicts.slice(-3).map(v => `${v.again ? 'would make again' : 'would NOT make again'}${v.note ? `: ${v.note}` : ''}`) } : {}),
+    // "Did the kids eat it?" answers after cooking, newest last. A refusal isn't a reason to leave it out.
+    ...((m.kids || []).length ? { kids: m.kids.slice(-3).map(k => `${k.ate ? 'ate it' : 'refused it'} on ${k.on}`) } : {}),
   }));
   const history = weeks.map(w => ({
     week: w.id,

@@ -185,7 +185,7 @@ test('toCook keeps last week\'s dinners until they are cooked', () => {
 });
 
 // ---------- added with the review fixes ----------
-import { scaleLine, scaleQty, scaleFor, servesNumber, isIdea, wouldNot, iso, pickIdeas } from '../js/plan.js';
+import { scaleLine, scaleQty, scaleFor, servesNumber, isIdea, wouldNot, iso, pickIdeas, kidsNote } from '../js/plan.js';
 
 test('dates are UK dates: just after midnight in summer it is already the next day', () => {
   assert.equal(iso(new Date('2026-07-01T23:30:00Z')), '2026-07-02');
@@ -233,6 +233,16 @@ test('a dinner they would not make again is not suggested', () => {
   assert.equal(wouldNot(meals[0]), true);
   assert.equal(wouldNot(meals[1]), false);
   assert.deepEqual(pickIdeas(meals, { count: 10 }).sort(), ['b', 'c']);
+});
+
+test('a dinner the kids refused is still suggested, with a dated note', () => {
+  const meals = [{ id: 'a', name: 'A', kids: [{ ate: false, on: '2026-11-19' }] }, { id: 'b', name: 'B', kids: [{ ate: false, on: '2026-11-02' }, { ate: true, on: '2026-11-19' }] }, { id: 'c', name: 'C', kids: [{ ate: true, on: '2026-11-19' }] }];
+  assert.deepEqual(pickIdeas(meals, { count: 10 }).sort(), ['a', 'b', 'c']);
+  assert.equal(kidsNote(meals[0]), 'Kids refused this on 19 Nov 2026');
+  assert.equal(kidsNote(meals[0], { short: true }), 'Kids refused 19 Nov 2026');
+  assert.equal(kidsNote(meals[1]), 'Kids refused this on 2 Nov 2026, but ate it on 19 Nov 2026');
+  assert.equal(kidsNote(meals[2]), '');
+  assert.equal(kidsNote({ name: 'D' }), '');
 });
 
 test('a trial order does not count as the week being ordered', () => {

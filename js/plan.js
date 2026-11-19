@@ -131,6 +131,19 @@ export function pickIdeas(meals, { count = 10, favourites = 4, today = iso(new D
 export const lastVerdict = m => (m.verdicts || []).slice(-1)[0] || null;
 export const wouldNot = m => lastVerdict(m)?.again === false;
 
+// "Did the kids eat it?" after cooking (Recipes). kids: [{ ate, by, on }], newest last.
+// A refusal never stops a meal being suggested; it's shown as a note instead.
+export const lastKidsRefusal = m => (m.kids || []).filter(k => k.ate === false).slice(-1)[0] || null;
+// "Kids refused this on 19 Nov 2026" (and whether they've eaten it since), or ''.
+export function kidsNote(m, { short = false } = {}) {
+  const r = lastKidsRefusal(m || {});
+  if (!r?.on) return '';
+  const date = d => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Europe/London' });
+  const since = (m.kids || []).filter(k => k.ate === true && String(k.on) > String(r.on)).slice(-1)[0];
+  if (short) return `Kids refused ${date(r.on)}${since ? ', ate it since' : ''}`;
+  return `Kids refused this on ${date(r.on)}${since ? `, but ate it on ${date(since.on)}` : ''}`;
+}
+
 // Ideas Claude (or a recipe site) suggested stay out of the meal library until
 // someone picks them. Older docs have no idea flag: an unpicked meal added by
 // Claude or a site (addedBy with no uid) counts as an idea.

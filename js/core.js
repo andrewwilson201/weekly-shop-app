@@ -5,9 +5,9 @@
 // Every module imports this file (and store.js, plan.js, ui.js) with the same
 // ?v= query, so they all share one copy. Bump it in every import when any of
 // the app's files change, so phones don't mix old and new files.
-import * as S from './store.js?v=13';
-import { iso } from './plan.js?v=13';
-import { icon, avatar } from './ui.js?v=13';
+import * as S from './store.js?v=14';
+import { iso } from './plan.js?v=14';
+import { icon, avatar } from './ui.js?v=14';
 
 export const $main = document.getElementById('main');
 export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

@@ -479,6 +479,15 @@ a.chip:hover { text-decoration: none; }
 .verdict { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .verdict .btn svg { width: 16px; height: 16px; }
 .verdict.sm .btn { padding: 6px 9px; }
+/* After cooking: "Did the kids eat it?" and "Would you make it again?", one row each. */
+.after { display: flex; flex-direction: column; gap: 8px; }
+.after .verdict { display: flex; justify-content: flex-end; }
+.after .verdict > .small { margin-right: auto; }
+.list > li.asks { flex-wrap: wrap; }
+.after.sm { flex-basis: 100%; padding-left: 48px; gap: 6px; }
+/* "Kids refused this on …" */
+.list .meta.kids, .why.kids { color: var(--warm); display: flex; align-items: center; gap: 4px; }
+.list .meta.kids svg, .why.kids svg { width: 13px; height: 13px; flex: none; }
 
 /* Bigger tap targets (44px) for ticks without making them look bigger. */
 .check { position: relative; }
