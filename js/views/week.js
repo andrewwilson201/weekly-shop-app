@@ -1,10 +1,10 @@
 // Next shop: the delivery day and the dinners for the shop being planned.
-import * as S from '../store.js?v=13';
-import { addDays, pickIdeas, awayOn, isIdea, planDate } from '../plan.js?v=13';
-import { icon, tile, avatar } from '../ui.js?v=13';
-import { st, esc, money, fmtDay, today, plural, head, section, empty, run, keep, routes, actions } from '../core.js?v=13';
-import { importLink } from './meals.js?v=13';
-import { mealById, plan, planId, savePlan, planOrder, activeOrder, nextDelivery, orderLine, slotText, flow, stillToCook, askRecipe } from '../state.js?v=13';
+import * as S from '../store.js?v=14';
+import { addDays, pickIdeas, awayOn, isIdea, planDate, kidsNote } from '../plan.js?v=14';
+import { icon, tile, avatar } from '../ui.js?v=14';
+import { st, esc, money, fmtDay, today, plural, head, section, empty, run, keep, routes, actions } from '../core.js?v=14';
+import { importLink } from './meals.js?v=14';
+import { mealById, plan, planId, savePlan, planOrder, activeOrder, nextDelivery, orderLine, slotText, flow, stillToCook, askRecipe } from '../state.js?v=14';
 
 const NEEDS_YOU = ['need_code', 'choose_slot', 'review', 'needs_you'];
 // "35 mins" on an idea card: from its recipe, or Claude's estimate.
@@ -61,6 +61,7 @@ routes.week = () => {
       ${tile(m)}
       <span class="grow"><span class="title">${esc(m.name)}</span>
       ${w.reasons?.[id] ? `<span class="why">${esc(w.reasons[id])}</span>` : ''}
+      ${kidsNote(m) ? `<span class="why kids">${icon('alert')} ${esc(kidsNote(m))}</span>` : ''}
       <span class="chips">${tag}${time ? `<span class="chip outline">${icon('clock')} ${esc(time)}</span>` : ''}${ingredientsChip(m)}<span class="chip link" data-act="viewRecipe" data-id="${esc(id)}" role="link">${icon('book')} Recipe</span>${m.cuisine ? `<span class="chip outline">${esc(m.cuisine)}</span>` : ''}${p ? `<span class="chip ok">${avatar(p, 'sm')} ${esc(p.name?.split(' ')[0] || '')}</span>` : ''}</span></span>
       <span class="tick">${icon('check')}</span></button>`;
   });
@@ -118,7 +119,7 @@ function dishBox() {
   const picks = plan()?.picks || {};
   // Your meal library only (as on Meals): unpicked ideas stay out.
   const rows = typedMeals().filter(m => !isIdea(m)).sort((a, b) => (b.timesChosen || 0) - (a.timesChosen || 0) || a.name.localeCompare(b.name)).map(m => `<li data-name="${esc(m.name.toLowerCase())}">${tile(m, 'sm')}
-    <span class="grow"><span class="name">${esc(m.name)}</span><span class="meta">${m.timesChosen ? `Picked ${m.timesChosen}× before` : 'In your meals'}</span></span>
+    <span class="grow"><span class="name">${esc(m.name)}</span><span class="meta">${m.timesChosen ? `Picked ${m.timesChosen}× before` : 'In your meals'}${kidsNote(m) ? ` · ${esc(kidsNote(m, { short: true }))}` : ''}</span></span>
     ${picks[m.id] ? `<span class="pill ok">${icon('check')} Picked</span>` : `<button type="button" class="btn small tonal" data-act="pickDish" data-id="${esc(m.id)}">Pick this</button>`}</li>`).join('');
   return `<form class="card dish" data-form="addDish">
     <h3>${icon('plus')} Know what you want to cook?</h3>

@@ -1,9 +1,9 @@
 // Settings: the household, notifications, the order helper, and data.
-import * as S from '../store.js?v=13';
-import { iso } from '../plan.js?v=13';
-import { icon, avatar } from '../ui.js?v=13';
-import { st, esc, fmtDay, today, head, section, run, render, toast, hostOf, keep, routes, actions } from '../core.js?v=13';
-import { activeOrder, householdServes, startOrder } from '../state.js?v=13';
+import * as S from '../store.js?v=14';
+import { iso } from '../plan.js?v=14';
+import { icon, avatar } from '../ui.js?v=14';
+import { st, esc, fmtDay, today, head, section, run, render, toast, hostOf, keep, routes, actions } from '../core.js?v=14';
+import { activeOrder, householdServes, startOrder } from '../state.js?v=14';
 
 routes.settings = () => {
   const h = st.household;

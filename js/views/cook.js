@@ -1,9 +1,9 @@
 // Recipes: the dinners shopped for, and each one's recipe to cook from.
-import * as S from '../store.js?v=13';
-import { servesNumber, scaleFor, scaleLine, planDate } from '../plan.js?v=13';
-import { icon, tile } from '../ui.js?v=13';
-import { esc, fmtDay, today, head, section, empty, run, toast, render, hostOf, keep, route, arg, routes, actions, hooks } from '../core.js?v=13';
-import { mealById, planId, cookList, hasMethod, askRecipe, householdServes } from '../state.js?v=13';
+import * as S from '../store.js?v=14';
+import { servesNumber, scaleFor, scaleLine, planDate, kidsNote } from '../plan.js?v=14';
+import { icon, tile } from '../ui.js?v=14';
+import { esc, fmtDay, today, head, section, empty, run, toast, render, hostOf, keep, route, arg, routes, actions, hooks } from '../core.js?v=14';
+import { mealById, planId, cookList, hasMethod, askRecipe, householdServes } from '../state.js?v=14';
 
 // Each shop's dinners are headed by when it arrives.
 const weekName = (wid, x) => wid === planId() ? 'Next shop' : x?.delivery ? `Shop for ${fmtDay(x.delivery)}` : `Shop started ${fmtDay(planDate(wid))}`;
@@ -34,7 +34,8 @@ routes.cook = () => {
     html += section(weekName(wid, rows[0]), { count: rows.length, right: `<span class="small muted">${esc(deliveryNote(rows[0]))}</span>` });
     html += `<div class="card flush"><ul class="list">` + rows.map(x => {
       const m = mealById(x.mealId);
-      return `<li class="link-row">${tile(m, 'sm')}<a href="#/recipe/${esc(m.id)}" class="grow"><span class="name">${esc(m.name)}</span><span class="meta">${esc(recipeMeta(m))}</span></a>
+      const kn = kidsNote(m, { short: true });
+      return `<li class="link-row">${tile(m, 'sm')}<a href="#/recipe/${esc(m.id)}" class="grow"><span class="name">${esc(m.name)}</span><span class="meta">${esc(recipeMeta(m))}</span>${kn ? `<span class="meta kids">${icon('alert')} ${esc(kn)}</span>` : ''}</a>
         <button class="btn small outline" data-act="cooked" data-id="${esc(wid)}|${esc(m.id)}" aria-label="Mark ${esc(m.name)} cooked">${icon('check')} Cooked</button></li>`;
     }).join('') + `</ul></div>`;
     if (past && rows.length > 1) html += `<p class="small muted" style="margin:-4px 4px 0;text-align:right"><button class="link" data-act="notCookingWeek" data-id="${esc(wid)}">Not making the rest</button></p>`;
@@ -43,9 +44,10 @@ routes.cook = () => {
   if (done.length) {
     html += `<details class="card flush disclosure" style="margin-top:16px" ${keep.cookedOpen ? 'open' : ''} data-toggle="cookedOpen"><summary>${icon('check')} Done lately <span class="count">${done.length}</span></summary><ul class="list">` + done.map(x => {
       const m = mealById(x.mealId);
-      const v = x.done.verdict;
-      return `<li>${tile(m, 'sm')}<a href="#/recipe/${esc(m.id)}" class="grow"><span class="name">${esc(m.name)}</span><span class="meta">${x.done.skipped ? 'Not making it' : `Cooked ${fmtDay(x.done.on)}`}${x.done.by?.name ? ` · ${esc(x.done.by.name.split(' ')[0])}` : ''}${v ? ` · ${v.again ? 'Would make again' : 'Wouldn\'t make again'}` : ''}</span></a>
-        ${!x.done.skipped && !v ? verdictButtons(x.week, m.id, true) : `<button class="btn small ghost" data-act="uncook" data-id="${esc(x.week)}|${esc(m.id)}">Undo</button>`}</li>`;
+      const v = x.done.verdict, k = x.done.kids;
+      const asks = x.done.skipped ? '' : afterCooking(x.week, m.id, x.done, true);
+      return `<li class="${asks ? 'asks' : ''}">${tile(m, 'sm')}<a href="#/recipe/${esc(m.id)}" class="grow"><span class="name">${esc(m.name)}</span><span class="meta">${x.done.skipped ? 'Not making it' : `Cooked ${fmtDay(x.done.on)}`}${x.done.by?.name ? ` · ${esc(x.done.by.name.split(' ')[0])}` : ''}${k ? ` · ${k.ate ? 'Kids ate it' : 'Kids refused it'}` : ''}${v ? ` · ${v.again ? 'Would make again' : 'Wouldn\'t make again'}` : ''}</span></a>
+        ${asks ? '' : `<button class="btn small ghost" data-act="uncook" data-id="${esc(x.week)}|${esc(m.id)}">Undo</button>`}${asks}</li>`;
     }).join('') + `</ul></details>`;
   }
   // Methods for anything on the list that hasn't got one yet.
@@ -53,13 +55,38 @@ routes.cook = () => {
   return html;
 };
 const markCooked = (wid, id, extra = {}) => S.updateH(['weeks', wid], { [`cooked.${id}`]: { by: S.me(), on: today(), ...extra } });
-actions.cooked = el => { const [wid, id] = el.dataset.id.split('|'); run(() => markCooked(wid, id), `${mealById(id)?.name || 'Dinner'} marked cooked. Would you make it again?`); };
+actions.cooked = el => { const [wid, id] = el.dataset.id.split('|'); run(() => markCooked(wid, id), `${mealById(id)?.name || 'Dinner'} marked cooked. Did the kids eat it?`); };
+// The questions after cooking that haven't been answered yet: did the kids eat
+// it, and would you make it again. '' once both are answered.
+function afterCooking(wid, id, done, small = false) {
+  const qs = [];
+  if (done.kids == null) qs.push(kidsButtons(wid, id, small));
+  if (!done.verdict) qs.push(verdictButtons(wid, id, small, true));
+  return qs.length ? `<div class="after${small ? ' sm' : ''}">${qs.join('')}</div>` : '';
+}
+// "Did the kids eat it?": saved on the week's cooked entry and on the meal
+// (kids: [{ ate, by, on }]). A refusal doesn't stop the meal being suggested;
+// it shows as "Kids refused this on …" wherever the meal appears, and Claude
+// takes it into account when picking ideas.
+function kidsButtons(wid, id, small = false) {
+  const d = `${esc(wid)}|${esc(id)}`;
+  return `<span class="verdict${small ? ' sm' : ''}"><span class="small muted">${small ? 'Kids ate it?' : 'Did the kids eat it?'}</span><button class="btn small outline" data-act="kids" data-id="${d}" data-v="yes" aria-label="The kids ate it">${icon('check')} Ate it</button><button class="btn small outline" data-act="kids" data-id="${d}" data-v="no" aria-label="The kids refused it">${icon('x')} Refused</button></span>`;
+}
+actions.kids = el => {
+  const [wid, id] = el.dataset.id.split('|');
+  const ate = el.dataset.v === 'yes';
+  const k = { ate, by: S.me(), on: today() };
+  run(async () => {
+    await S.updateH(['weeks', wid], { [`cooked.${id}.kids`]: k });
+    await S.updateH(['meals', id], { kids: S.arrayUnion(k) });
+  }, ate ? 'Noted: the kids ate it' : 'Noted. It can still be suggested, with a note that the kids refused it');
+};
 // "Would you make it again?" after cooking: saved on the week's cooked entry and
 // on the meal (verdicts), which Claude reads when it picks ideas. A "no" stops
 // the dinner being suggested again; a note ("too spicy for the kids") guides Claude.
 function verdictButtons(wid, id, small = false, label = !small) {
   const d = `${esc(wid)}|${esc(id)}`;
-  return `<span class="verdict${small ? ' sm' : ''}">${label ? '<span class="small muted">Would you make it again?</span>' : ''}<button class="btn small outline" data-act="verdict" data-id="${d}" data-v="yes" aria-label="Would make it again">${icon('thumbUp')}${small ? '' : ' Yes'}</button><button class="btn small outline" data-act="verdict" data-id="${d}" data-v="no" aria-label="Wouldn't make it again">${icon('thumbDown')}${small ? '' : ' No'}</button></span>`;
+  return `<span class="verdict${small ? ' sm' : ''}">${label ? `<span class="small muted">${small ? 'Make again?' : 'Would you make it again?'}</span>` : ''}<button class="btn small outline" data-act="verdict" data-id="${d}" data-v="yes" aria-label="Would make it again">${icon('thumbUp')}${small ? '' : ' Yes'}</button><button class="btn small outline" data-act="verdict" data-id="${d}" data-v="no" aria-label="Wouldn't make it again">${icon('thumbDown')}${small ? '' : ' No'}</button></span>`;
 }
 actions.verdict = el => {
   const [wid, id] = el.dataset.id.split('|');
@@ -85,6 +112,8 @@ routes.recipe = () => {
   const from = /^https?:\/\//.test(m.source || '') ? m.source : null;
   let html = `<a class="btn small ghost" href="${entry ? '#/cook' : '#/week'}" style="margin:8px 0 0 -6px">${icon('back')} ${entry ? 'Recipes' : 'Next shop'}</a>`;
   html += head(esc(m.name), { eyebrow: entry ? `${weekName(entry.week, entry)} · ${esc(deliveryNote(entry))}` : 'Recipe' });
+  const kn = kidsNote(m);
+  if (kn) html += `<div class="notice warn">${icon('alert')}<span class="grow">${esc(kn)}</span></div>`;
   if (m.image && /^https:\/\//.test(m.image)) html += `<img class="recipe-img" src="${esc(m.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`;
   // Scaled to how many you cook for (Settings › Household, or changed here for this meal).
   const recipeServes = servesNumber(r.servings || m.servings);
@@ -113,8 +142,8 @@ routes.recipe = () => {
   }
   html += `<p class="small muted" style="margin:12px 4px 0"><a href="#/meal/${esc(m.id)}">Edit the shop ingredients</a></p>`;
 
-  if (entry?.done && !entry.done.skipped && !entry.done.verdict) {
-    html += `<div class="actionbar"><div><span class="sum"><b>Make it again?</b><span>Cooked ${fmtDay(entry.done.on)}</span></span><span class="spacer"></span>${verdictButtons(entry.week, m.id, false, false)}</div></div>`;
+  if (entry?.done && !entry.done.skipped && (!entry.done.verdict || entry.done.kids == null)) {
+    html += `<div class="actionbar col"><div><span class="sum"><b>How did it go?</b><span>Cooked ${fmtDay(entry.done.on)}</span></span>${afterCooking(entry.week, m.id, entry.done)}</div></div>`;
   } else if (entry && !entry.done) {
     html += `<div class="actionbar"><div><button class="btn outline" data-act="notCooking" data-id="${esc(entry.week)}|${esc(m.id)}">Not making it</button><span class="spacer"></span>
       <button class="btn primary" data-act="cooked" data-id="${esc(entry.week)}|${esc(m.id)}">${icon('check')} Cooked it</button></div></div>`;

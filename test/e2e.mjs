@@ -353,17 +353,23 @@ await a.click('.method button >> nth=0');
 assert(await a.locator('.method button.done').count() === 1, 'a step can be ticked off');
 await a.screenshot({ path: `${SHOTS}/14-recipe.png`, fullPage: true });
 await a.click('button:has-text("Cooked it")');
-// Would you make it again? (the note prompt is accepted empty)
+// Did the kids eat it, and would you make it again? (the note prompt is accepted empty)
 await a.waitForSelector('.actionbar button[data-act=verdict][data-v=yes]');
+await a.waitForSelector('.actionbar button[data-act=kids][data-v=no]');
 await a.screenshot({ path: `${SHOTS}/14b-make-again.png` });
+await a.click('.actionbar button[data-act=kids][data-v=no]');
+await a.waitForSelector('.notice:has-text("Kids refused this on")');
+assert(true, 'a refusal by the kids shows as a dated note on the recipe');
 await a.click('.actionbar button[data-act=verdict][data-v=yes]');
 await a.waitForSelector('.actionbar button:has-text("Undo")');
 assert(true, 'asked whether we\'d make it again after cooking');
+await a.screenshot({ path: `${SHOTS}/14c-kids-refused.png` });
 await a.goto(`${BASE}#/cook`);
 await a.waitForSelector('summary:has-text("Done lately")');
 assert(await a.locator('.list li:has(button[data-act=cooked])').count() === toCookCount - 1, 'a cooked dinner leaves the list');
 await a.click('summary:has-text("Done lately")');
 assert(await a.isVisible('text=Would make again'), 'the answer shows under Done lately');
+assert(await a.isVisible('text=Kids refused it'), 'the kids\' answer shows under Done lately');
 {
   const other = (await a.locator('.list li:has(button[data-act=cooked]) .name').first().innerText());
   await a.click('.list a:has-text("' + other.replace(/"/g, '') + '")');
