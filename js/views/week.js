@@ -1,10 +1,10 @@
 // Next shop: the delivery day and the dinners for the shop being planned.
-import * as S from '../store.js?v=14';
-import { addDays, pickIdeas, awayOn, isIdea, planDate, kidsNote } from '../plan.js?v=14';
-import { icon, tile, avatar } from '../ui.js?v=14';
-import { st, esc, money, fmtDay, today, plural, head, section, empty, run, keep, routes, actions } from '../core.js?v=14';
-import { importLink } from './meals.js?v=14';
-import { mealById, plan, planId, savePlan, planOrder, activeOrder, nextDelivery, orderLine, slotText, flow, stillToCook, askRecipe } from '../state.js?v=14';
+import * as S from '../store.js?v=15';
+import { addDays, pickIdeas, ideaMix, awayOn, isIdea, planDate, kidsNote } from '../plan.js?v=15';
+import { icon, tile, avatar } from '../ui.js?v=15';
+import { st, esc, money, fmtDay, today, plural, head, section, empty, run, keep, routes, actions } from '../core.js?v=15';
+import { importLink } from './meals.js?v=15';
+import { mealById, plan, planId, savePlan, planOrder, activeOrder, nextDelivery, orderLine, slotText, flow, stillToCook, askRecipe } from '../state.js?v=15';
 
 const NEEDS_YOU = ['need_code', 'choose_slot', 'review', 'needs_you'];
 // "35 mins" on an idea card: from its recipe, or Claude's estimate.
@@ -29,7 +29,7 @@ routes.week = () => {
   }
   if (!w?.offered?.length) {
     if (w?.ideasRequested) return html + `<div class="card">${empty('sparkle', 'Claude is choosing ideas', 'They\'ll appear here in a minute or two.', '<span class="spinner" style="display:inline-block"></span>')}</div>`;
-    return html + `<div class="card">${empty('sparkle', 'Start the next shop', 'Out of food? Get ten dinner ideas and pick as many as you need.',
+    return html + `<div class="card">${empty('sparkle', 'Start the next shop', `Out of food? Get ${ideaMix(st.household).total} dinner ideas and pick as many as you need.`,
       `<div class="row" style="justify-content:center"><button class="btn primary" data-act="askClaude">${icon('sparkle')} Ask Claude for ideas</button><button class="btn" data-act="makeIdeas">Pick from our meals now</button></div>`)}</div>` + dishBox();
   }
   const picks = w.picks || {};
@@ -85,10 +85,11 @@ actions.loadStarter = () => run(async () => {
 }, 'Starter meals loaded');
 // The askClaude function (or the worker, as a backup) sees ideasRequested; picks made so far are kept.
 actions.askClaude = () => run(() => savePlan({ ideasRequested: true }), 'Asked Claude. Ideas in a minute or two');
-actions.makeIdeas = () => run(() => savePlan({ offered: pickIdeas(st.meals, { today: today() }), picks: plan()?.picks || {} }));
+// From the meal library only (the phone can't read recipe sites or invent dishes), as many as Settings › Meal ideas adds up to.
+actions.makeIdeas = () => run(() => { const mix = ideaMix(st.household); return savePlan({ offered: pickIdeas(st.meals, { count: mix.total, favourites: mix.favourites, today: today() }), picks: plan()?.picks || {} }); });
 actions.remakeIdeas = () => run(async () => {
   const w = plan(); const keepIds = Object.keys(w.picks || {});
-  const fresh = pickIdeas(st.meals.filter(m => !w.offered.includes(m.id)), { count: Math.max(3, 10 - keepIds.length), today: today() });
+  const fresh = pickIdeas(st.meals.filter(m => !w.offered.includes(m.id)), { count: Math.max(3, ideaMix(st.household).total - keepIds.length), today: today() });
   await savePlan({ offered: [...keepIds, ...fresh] });
 });
 actions.pick = el => run(() => {

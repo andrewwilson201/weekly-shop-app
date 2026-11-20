@@ -1,9 +1,9 @@
 // Settings: the household, notifications, the order helper, and data.
-import * as S from '../store.js?v=14';
-import { iso } from '../plan.js?v=14';
-import { icon, avatar } from '../ui.js?v=14';
-import { st, esc, fmtDay, today, head, section, run, render, toast, hostOf, keep, routes, actions } from '../core.js?v=14';
-import { activeOrder, householdServes, startOrder } from '../state.js?v=14';
+import * as S from '../store.js?v=15';
+import { iso, ideaMix, MIX_MAX, MIX_TOTAL_MAX } from '../plan.js?v=15';
+import { icon, avatar } from '../ui.js?v=15';
+import { st, esc, fmtDay, today, head, section, run, render, toast, hostOf, keep, routes, actions } from '../core.js?v=15';
+import { activeOrder, householdServes, startOrder } from '../state.js?v=15';
 
 routes.settings = () => {
   const h = st.household;
@@ -44,8 +44,11 @@ routes.settings = () => {
       <textarea name="notes" rows="4" data-keep="notes" placeholder="2 adults, children aged 5 and 7. Mild spice for the kids. No mushrooms.">${esc(h.notes || '')}</textarea></label>
       <button class="btn small primary">Save</button></form>
 
+    ${section('Meal ideas')}
+    ${mixCard()}
+
     ${section('Recipe sites')}
-    <div class="card"><p class="small muted">Each time you ask for ideas, one is a recipe published in the last week on each of these sites. Add a recipe site's address (or its RSS feed).</p>
+    <div class="card"><p class="small muted">Recipes published in the last week on these sites, as many as you set under Meal ideas, taken from each site in turn. Add a recipe site's address (or its RSS feed).</p>
       ${sources().map((s, i) => { const st2 = (h.recipeSourceStatus || []).find(x => x.url === s.url); return `<div class="row nowrap" style="margin-bottom:10px;padding:10px 12px;border-radius:12px;background:var(--surface-2)">${icon('link')}<span class="grow small"><b>${esc(s.name || hostOf(s.url))}</b><br><span class="muted">${esc(hostOf(s.url))}${st2 ? ` · ${st2.ok ? '' : 'Last try failed: '}${esc(st2.note)}` : ''}</span></span><button class="btn small ghost danger" data-act="delSource" data-id="${i}">Remove</button></div>`; }).join('')}
       ${sources().length < 5 ? `<form data-form="addSource" class="row"><input type="text" name="url" required style="flex:2 1 160px" placeholder="bbcgoodfood.com" aria-label="Recipe site address" inputmode="url" autocapitalize="off"><input type="text" name="name" placeholder="Name (optional)" aria-label="Name" style="flex:1 1 120px"><button class="btn primary">Add</button></form>` : ''}</div>
 
@@ -88,6 +91,29 @@ actions.notifyOn = () => run(async () => { await S.enableNotifications(); render
 actions.notifyOff = () => run(async () => { await S.disableNotifications(); render(); }, 'Notifications are off for this phone');
 actions.cheaperSwaps = el => run(() => S.updateH([], { cheaperSwaps: el.checked }), el.checked ? 'Cheaper swaps on' : 'Cheaper swaps off');
 actions.saveNotes = f => { const notes = f.notes.value.trim().slice(0, 1000); delete keep.notes; run(() => S.updateH([], { notes }), 'Saved'); };
+// How many ideas from each source (household.ideaMix, see ideaMix in js/plan.js).
+// The total is just the sum, so there's no separate number to disagree with it.
+const MIX_ROWS = [
+  { key: 'sites', icon: 'link', label: 'From recipe sites', hint: 'New this week, each site in turn.' },
+  { key: 'fresh', icon: 'sparkle', label: 'New ideas from Claude', hint: 'Dishes you haven\'t had before.' },
+  { key: 'favourites', icon: 'star', label: 'Cooked before', hint: 'From your meals, favourites first.' },
+];
+function mixCard() {
+  const mix = ideaMix(st.household);
+  const noSites = !sources().length;
+  return `<div class="card"><p class="small muted" style="margin:0 0 4px">How many dinner ideas you get each time, and where they come from.</p>
+    ${MIX_ROWS.map(r => `<div class="row nowrap" style="gap:12px;padding:12px 0;border-bottom:1px solid var(--line)"><span class="tile sm other">${icon(r.icon)}</span><span class="grow"><b>${r.label}</b><br><span class="small muted">${r.key === 'sites' && noSites ? 'No sites yet, so these are new ideas from Claude.' : r.hint}</span></span>
+      <span class="stepper"><button class="step" data-act="mix" data-id="${r.key}:-1" aria-label="Fewer ${r.label.toLowerCase()}" ${mix[r.key] <= 0 || mix.total <= 1 ? 'disabled' : ''}>${icon('minus')}</button><b>${mix[r.key]}</b><button class="step" data-act="mix" data-id="${r.key}:1" aria-label="More ${r.label.toLowerCase()}" ${mix[r.key] >= MIX_MAX || mix.total >= MIX_TOTAL_MAX ? 'disabled' : ''}>${icon('plus')}</button></span></div>`).join('')}
+    <div class="row nowrap" style="padding-top:12px"><span class="grow"><b>${mix.total} idea${mix.total === 1 ? '' : 's'} each time</b><br><span class="small muted">Up to ${MIX_TOTAL_MAX}. If the sites don't have enough new recipes, Claude makes up the difference with new ideas.</span></span></div></div>`;
+}
+actions.mix = el => {
+  const [key, d] = el.dataset.id.split(':');
+  const mix = ideaMix(st.household);
+  const next = { sites: mix.sites, fresh: mix.fresh, favourites: mix.favourites, [key]: mix[key] + Number(d) };
+  const total = next.sites + next.fresh + next.favourites;
+  if (next[key] < 0 || next[key] > MIX_MAX || total < 1 || total > MIX_TOTAL_MAX) return;
+  run(() => S.updateH([], { ideaMix: next }));
+};
 // Recipe sites (see worker/feeds.mjs). Never set means the Guardian's recipes.
 const GUARDIAN = { name: 'The Guardian', url: 'https://www.theguardian.com/tone/recipes/rss' };
 const sources = () => Array.isArray(st.household.recipeSources) ? st.household.recipeSources : [GUARDIAN];

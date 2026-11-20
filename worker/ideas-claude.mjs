@@ -1,16 +1,16 @@
-// Claude picks the week's 10 meal ideas, learning from what the household
+// Claude picks the meal ideas (10 by default; Settings › Meal ideas sets how many from each source), learning from what the household
 // actually chose, what they passed over, and the staples they skipped.
 // New dishes come back with ingredient lists and are added to the library.
 // Needs ANTHROPIC_API_KEY; without it (or on any failure) the caller falls
 // back to the rule-based pickIdeas in js/plan.js.
 
 import Anthropic from '@anthropic-ai/sdk';
-import { wouldNot } from '../js/plan.js';
+import { wouldNot, IDEA_MIX, mixFor, roundRobin } from '../js/plan.js';
 
 const MODEL = process.env.CLAUDE_MODEL || 'claude-opus-5-5';
 
 export const PROTEINS = ['chicken', 'beef', 'pork', 'lamb', 'turkey', 'fish', 'seafood', 'vegetarian', 'vegan'];
-// At most this many of the 10 share a main protein (vegetarian dishes count together with vegan).
+// At most this many of 10 ideas share a main protein (vegetarian dishes count together with vegan); see maxPerProtein.
 export const MAX_PER_PROTEIN = 2;
 
 // What's in season in the UK each month (UK-grown veg and fruit, plus the
@@ -79,38 +79,55 @@ const SCHEMA = {
   },
 };
 
-const SYSTEM = `You plan the weekly dinners for a family's online Sainsbury's shop. Each week you offer 10 dinner ideas; the family picks about 5.
+// The firmer variety rules scale with how many ideas are asked for (10 by default).
+export const maxPerProtein = (total = 10) => Math.max(MAX_PER_PROTEIN, Math.round(total / 5));
 
-Learn from their history: suggest dishes like the ones they pick, and fewer like the ones they keep passing over. After cooking a dinner they say whether they'd make it again (after_cooking in the library): never offer a dish whose latest answer is "would NOT make again", treat their notes (for example "too spicy for the kids") as guidance for new dishes, and favour dishes they'd make again. They also say whether the children ate it (kids in the library: the dates the kids refused it or ate it). A refusal does NOT rule a dish out: keep offering it like any other, but don't put more than 2 dishes the kids last refused in the 10, and when you do offer one, say in its reason how to make it go down better with the kids (for example sauce on the side, milder spice, or a familiar side). For new dishes, lean towards the kinds of food the kids eat. Offer a few of the household's favourites, but don't repeat anything they had in the last two weeks.
+// mix: how many from each source this time ({ sites, fresh, favourites, total }, see mixFor in js/plan.js).
+export function systemPrompt(mix = { sites: 0, fresh: 5, favourites: 5, total: 10 }) {
+  const n = mix.total;
+  const fish = n >= 4 ? 'At least 1 fish or seafood dinner' : '';
+  const veg = n >= 6 ? 'at least 2 vegetarian or vegan dinners' : n >= 3 ? 'at least 1 vegetarian or vegan dinner' : '';
+  const sources = [
+    mix.favourites ? `- Exactly ${mix.favourites} from their meal library (existing_id set): dishes they've had before. Favour their favourites and ones they'd make again.` : '- None from their meal library: every idea is a new dish.',
+    mix.fresh ? `- Exactly ${mix.fresh} new dish${mix.fresh === 1 ? '' : 'es'} you choose (existing_id "" and recipe_url ""), chosen to suit what they evidently like but stretching them a little. Don't offer a variation of something already among the ideas or in their library.` : '- No new dishes of your own.',
+    mix.sites ? `- Exactly ${mix.sites} from the recipes newly published on their chosen recipe sites (listed in the message), as new dishes with recipe_url set to the recipe's url and the name as published. Spread them across the sites: one from each site before a second from any, choosing the one that best suits this family and the season from each, and the newer one when two suit equally. List their ingredients as for any new dish.` : '',
+  ].filter(Boolean).join('\n');
+  return `You plan the weekly dinners for a family's online Sainsbury's shop. Each time you offer ${n} dinner idea${n === 1 ? '' : 's'}; the family picks as many as they need.
+
+Learn from their history: suggest dishes like the ones they pick, and fewer like the ones they keep passing over. After cooking a dinner they say whether they'd make it again (after_cooking in the library): never offer a dish whose latest answer is "would NOT make again", treat their notes (for example "too spicy for the kids") as guidance for new dishes, and favour dishes they'd make again. They also say whether the children ate it (kids in the library: the dates the kids refused it or ate it). A refusal does NOT rule a dish out: keep offering it like any other, but don't put more than 2 dishes the kids last refused among the ideas, and when you do offer one, say in its reason how to make it go down better with the kids (for example sauce on the side, milder spice, or a familiar side). For new dishes, lean towards the kinds of food the kids eat. Don't repeat anything they had in the last two weeks.
+
+Where the ideas come from. The family set these numbers themselves, so keep to them exactly:
+${sources}
 
 Variety matters as much as taste. These rules are firm:
-- No more than ${MAX_PER_PROTEIN} of the 10 share a main protein (chicken, beef, pork, lamb, turkey, fish, seafood, vegetarian or vegan; vegetarian and vegan count together).
-- At least 1 fish or seafood dinner and at least 2 vegetarian or vegan dinners.
-- At least 5 different cuisines, and no more than 3 pasta, rice or noodle dishes between them.
-- Mix the style: traybakes, one-pot, stir-fries, grills, bakes, soups or salads, wraps or tacos, and at least 3 quick ones (under 30 minutes).
-- 4 or 5 dishes they haven't had, chosen to suit what they evidently like but stretching them a little. Don't offer a variation of something already in the 10 or in their library.
+- No more than ${maxPerProtein(n)} of the ${n} share a main protein (chicken, beef, pork, lamb, turkey, fish, seafood, vegetarian or vegan; vegetarian and vegan count together).${fish || veg ? `\n- ${[fish, veg].filter(Boolean).join(' and ').replace(/^a/, 'A')}.` : ''}
+- At least ${Math.min(5, Math.ceil(n / 2))} different cuisines, and no more than ${Math.max(1, Math.round(n * 0.3))} pasta, rice or noodle dish${Math.max(1, Math.round(n * 0.3)) === 1 ? '' : 'es'} between them.
+- Mix the style: traybakes, one-pot, stir-fries, grills, bakes, soups or salads, wraps or tacos, and at least ${Math.ceil(n * 0.3)} quick one${Math.ceil(n * 0.3) === 1 ? '' : 's'} (under 30 minutes).
 - Avoid anything offered in the last 3 weeks unless it's a clear favourite.
 
 Cook with the season (the message gives the month and what's in season in the UK):
 - Build new dishes around the produce that's in season now, and when choosing library meals favour ones that use it. Seasonal veg is cheaper and tastes better.
 - Let the weather lead the mix: in the colder months lean towards warming food (stews, casseroles, soups, pies, roasts, curries, bakes); in the warmer months lean towards lighter food (salads, grills and barbecue, wraps, quick stir-fries, cold noodles).
-- Lean, don't exclude. Most of the 10 should suit the season, but always keep 1 or 2 that go against it, such as a hearty warm salad or grain bowl in winter, or a light stew, curry or soup in summer. Never drop salads entirely in winter or stews entirely in summer.
+- Lean, don't exclude. Most of the ideas should suit the season, but ${n >= 5 ? 'always keep 1 or 2' : 'keep 1'} that go${n >= 5 ? '' : 'es'} against it, such as a hearty warm salad or grain bowl in winter, or a light stew, curry or soup in summer. Never drop salads entirely in winter or stews entirely in summer.
 - Library favourites can be offered at any time of year; just don't let out-of-season dishes take over.
 
-Use up what gets bought. A recipe that needs half a pot of soured cream, a bunch of coriander, a bag of spinach or half a tin of coconut milk leaves the rest to go off. Where you can, pair dishes so a fresh ingredient bought for one is used up by another among the 10 (for example fajitas and a curry that both use coriander and soured cream or yoghurt), and say so in the reason ("uses the rest of the coriander from the fajitas"). Don't force it at the cost of variety.
+Use up what gets bought. A recipe that needs half a pot of soured cream, a bunch of coriander, a bag of spinach or half a tin of coconut milk leaves the rest to go off. Where you can, pair dishes so a fresh ingredient bought for one is used up by another among the ideas (for example fajitas and a curry that both use coriander and soured cream or yoghurt), and say so in the reason ("uses the rest of the coriander from the fajitas"). Don't force it at the cost of variety.
 
 Give each idea a realistic total time (prep and cooking) so the family can pick quick ones for busy nights.
 
 For every new dish, list the ingredients to buy for that dinner for the whole household, as Sainsbury's shop items. Mark store-cupboard basics as pantry.
 
-When the message lists recipes newly published on the family's chosen recipe sites, include exactly one from each site (the one that best suits this family and the season) as a new dish, with recipe_url set to its url and the name as published. These count towards the new dishes and the variety rules; list their ingredients as for any new dish.
-
 Respect any notes about the household (ages, dislikes, allergies, how adventurous they are). Write each reason as one short, friendly sentence addressed to the family.`;
+}
 
 // featured: recipes newly published on the household's recipe sites
-// ([{ source, title, url, published, summary }]); one per site is asked for.
-export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '', month = '', featured = [] }) {
-  if (process.env.CLAUDE_FAKE) return fakeIdeas(meals, featured); // tests: no API call
+// ([{ source, title, url, published, summary }]). mix: how many ideas from each
+// source (ideaMix in js/plan.js); site slots the sites can't fill go to new dishes.
+export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '', month = '', featured = [], mix: wanted = IDEA_MIX }) {
+  const full = wanted.total != null ? wanted : { ...wanted, total: wanted.sites + wanted.fresh + wanted.favourites };
+  const mix = mixFor(full, featured.length);
+  if (!mix.sites) featured = [];
+  if (process.env.CLAUDE_FAKE) return fakeIdeas(meals, featured, mix); // tests: no API call
   if (!process.env.ANTHROPIC_API_KEY) return null;
   const client = new Anthropic();
   const byId = new Map(meals.map(m => [m.id, m]));
@@ -134,9 +151,9 @@ export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '
     `Meal library (JSON):\n${JSON.stringify(library)}`,
     `Recent shops, newest first (JSON):\n${JSON.stringify(history)}`,
     offeredRecently.length ? `Offered in the last 3 weeks: ${offeredRecently.join('; ')}` : '',
-    featured.length ? `New on their recipe sites in the last week (JSON):\n${JSON.stringify(featured.map(f => ({ site: f.source, title: f.title, url: f.url, published: f.published?.slice(0, 10), summary: f.summary })))}` : '',
+    featured.length ? `New on their recipe sites in the last week, newest first (JSON):\n${JSON.stringify(featured.map(f => ({ site: f.source, title: f.title, url: f.url, published: f.published?.slice(0, 10), summary: f.summary })))}` : '',
     skippedStaples.length ? `Regular items they've been leaving out of the shop lately: ${skippedStaples.join(', ')}` : '',
-    'Give exactly 10 ideas, following the variety rules. Use existing_id for library meals (with an empty ingredients list), and "" for new dishes.',
+    `Give exactly ${mix.total} ideas: ${[mix.favourites && `${mix.favourites} from the library`, mix.fresh && `${mix.fresh} new of your own`, mix.sites && `${mix.sites} from the recipe sites`].filter(Boolean).join(', ')}, following the variety rules. Use existing_id for library meals (with an empty ingredients list), and "" for new dishes.`,
   ].filter(Boolean).join('\n\n');
 
   const response = await client.beta.messages.create({
@@ -145,54 +162,64 @@ export async function claudeIdeas({ meals, weeks, skippedStaples = [], notes = '
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default', // if a safety check declines, the API retries on a suitable model
     output_config: { effort: 'medium', format: { type: 'json_schema', schema: SCHEMA } },
-    system: SYSTEM,
+    system: systemPrompt(mix),
     messages: [{ role: 'user', content: prompt }],
   });
   if (response.stop_reason === 'refusal' || response.stop_reason === 'max_tokens') throw new Error(`Claude stopped: ${response.stop_reason}`);
   const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('');
   const ideas = JSON.parse(text).ideas;
-  return validate(ideas, byId, featured);
+  return validate(ideas, byId, featured, mix);
 }
 
 // Keep only usable ideas: real library ids, or new dishes with ingredients. No duplicates.
-export function validate(ideas, byId, featured = []) {
+// With a mix, no more than that many of each kind are kept (the caller tops up);
+// each idea comes back with kind: 'favourites' (library), 'fresh' (new) or 'sites'.
+export function validate(ideas, byId, featured = [], mix = null) {
   const feedUrls = new Map(featured.map(f => [f.url, f]));
-  const out = []; const seen = new Set(); const perProtein = {};
+  const total = mix?.total ?? 10;
+  const perProteinMax = maxPerProtein(total);
+  const out = []; const seen = new Set(); const perProtein = {}; const perKind = {};
+  const full = kind => mix && (perKind[kind] || 0) >= (mix[kind] ?? 0);
   for (const i of ideas || []) {
     // Enforce the protein rule here too, in case the answer breaks it; the caller tops up.
     const p = i.protein === 'vegan' ? 'vegetarian' : i.protein;
     // The recipe-site picks always stay: they're the point of that setting.
-    if (p && !feedUrls.has(i.recipe_url) && (perProtein[p] || 0) >= MAX_PER_PROTEIN + (p === 'vegetarian' ? 1 : 0)) continue;
-    const before = out.length;
+    if (p && !feedUrls.has(i.recipe_url) && (perProtein[p] || 0) >= perProteinMax + (p === 'vegetarian' ? 1 : 0)) continue;
+    let idea = null;
     if (i.existing_id && byId.has(i.existing_id)) {
       // Never a dinner they said they wouldn't make again.
       if (seen.has(i.existing_id) || wouldNot(byId.get(i.existing_id))) continue;
-      seen.add(i.existing_id); out.push({ id: i.existing_id, reason: i.reason, ...(i.time ? { time: i.time } : {}) });
+      idea = { kind: 'favourites', id: i.existing_id, reason: i.reason, ...(i.time ? { time: i.time } : {}) };
     } else if (!i.existing_id && i.name && i.ingredients?.length) {
       const dup = [...byId.values()].find(m => m.name.toLowerCase() === i.name.toLowerCase());
-      if (dup) { if (!seen.has(dup.id) && !wouldNot(dup)) { seen.add(dup.id); out.push({ id: dup.id, reason: i.reason, ...(i.time ? { time: i.time } : {}) }); } }
+      if (dup) { if (!seen.has(dup.id) && !wouldNot(dup)) idea = { kind: 'favourites', id: dup.id, reason: i.reason, ...(i.time ? { time: i.time } : {}) }; }
       else {
         const f = feedUrls.get(i.recipe_url);
         // A recipe from a site already in the library (an earlier week) is offered again rather than added twice.
         const known = f && [...byId.values()].find(m => m.source === f.url);
-        if (known) { if (!seen.has(known.id)) { seen.add(known.id); out.push({ id: known.id, reason: i.reason, from: f.source }); } }
-        else out.push({ ...(f ? { from: f.source } : {}), meal: { name: i.name, ...(f ? { source: f.url } : {}), ...(i.time ? { time: i.time } : {}), tags: i.tags || [], ...(i.cuisine ? { cuisine: i.cuisine } : {}), ...(i.protein ? { protein: i.protein } : {}), ingredients: i.ingredients.map(g => ({ item: g.item, qty: Math.max(1, g.qty || 1), search: g.search || g.item, ...(g.pantry ? { pantry: true } : {}) })) }, reason: i.reason });
+        if (known) { if (!seen.has(known.id)) idea = { kind: 'sites', id: known.id, reason: i.reason, from: f.source }; }
+        else if (!f || !out.some(o => o.meal?.source === f.url)) idea = { kind: f ? 'sites' : 'fresh', ...(f ? { from: f.source } : {}), meal: { name: i.name, ...(f ? { source: f.url } : {}), ...(i.time ? { time: i.time } : {}), tags: i.tags || [], ...(i.cuisine ? { cuisine: i.cuisine } : {}), ...(i.protein ? { protein: i.protein } : {}), ingredients: i.ingredients.map(g => ({ item: g.item, qty: Math.max(1, g.qty || 1), search: g.search || g.item, ...(g.pantry ? { pantry: true } : {}) })) }, reason: i.reason };
       }
     }
-    if (p && out.length > before) { perProtein[p] = (perProtein[p] || 0) + 1; out[out.length - 1].protein = p; }
-    if (out.length === 10) break;
+    if (!idea || full(idea.kind)) continue;
+    if (idea.id) seen.add(idea.id);
+    perKind[idea.kind] = (perKind[idea.kind] || 0) + 1;
+    if (p) { perProtein[p] = (perProtein[p] || 0) + 1; idea.protein = p; }
+    out.push(idea);
+    if (out.length === total) break;
   }
   return out;
 }
 
-function fakeIdeas(meals, featured = []) {
+function fakeIdeas(meals, featured = [], mix = null) {
   const byId = new Map(meals.map(m => [m.id, m]));
   const ideas = meals.slice(0, 8).map((m, i) => ({ existing_id: m.id, name: m.name, reason: `Because you liked ${m.name.split(' ')[0].toLowerCase()} dishes`, time: `${25 + 5 * i} min`, tags: [], ingredients: [] }));
   ideas.push({ existing_id: '', name: 'Pretend new dish: lemon chicken orzo', reason: 'Something new, like your traybakes', time: '35 min', tags: ['chicken'],
     ingredients: [{ item: 'Orzo', qty: 1, search: 'sainsburys orzo', pantry: false }, { item: 'Chicken thighs', qty: 1, search: 'sainsburys chicken thighs', pantry: false }, { item: 'Olive oil', qty: 1, search: 'olive oil', pantry: true }] });
-  for (const f of [...new Map(featured.map(f => [f.source, f])).values()]) ideas.unshift({ existing_id: '', recipe_url: f.url, name: f.title, reason: `New on ${f.source} this week`, protein: 'vegetarian', tags: [],
+  const sites = mix ? roundRobin(featured).slice(0, mix.sites) : [...new Map(featured.map(f => [f.source, f])).values()];
+  for (const f of sites.reverse()) ideas.unshift({ existing_id: '', recipe_url: f.url, name: f.title, reason: `New on ${f.source} this week`, protein: 'vegetarian', tags: [],
     ingredients: [{ item: 'Butternut squash', qty: 1, search: 'sainsburys butternut squash', pantry: false }] });
-  return validate(ideas, byId, featured);
+  return validate(ideas, byId, featured, mix);
 }
 
 // Shop ingredient lists for meals that have none, e.g. meals from the order

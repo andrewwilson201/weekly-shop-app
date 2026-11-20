@@ -1,9 +1,9 @@
 // Meals: the household's dinners, recipe links, and the meal editor.
-import * as S from '../store.js?v=14';
-import { isIdea, kidsNote } from '../plan.js?v=14';
-import { icon, tile, MEAL_CATEGORIES, mealCategory, autoCategory, categoryTile } from '../ui.js?v=14';
-import { st, esc, fmtDay, plural, head, section, empty, run, render, keep, resetKeep, arg, openCats, routes, actions, hooks } from '../core.js?v=14';
-import { mealById, plan, savePlan } from '../state.js?v=14';
+import * as S from '../store.js?v=15';
+import { isIdea, kidsNote } from '../plan.js?v=15';
+import { icon, tile, MEAL_CATEGORIES, mealCategory, autoCategory, categoryTile } from '../ui.js?v=15';
+import { st, esc, fmtDay, plural, head, section, empty, run, render, keep, resetKeep, arg, openCats, routes, actions, hooks } from '../core.js?v=15';
+import { mealById, plan, savePlan } from '../state.js?v=15';
 
 export const libTabs = now => `<div class="seg" role="tablist">${[['meals', 'Meals'], ['staples', 'Staples']].map(([r, l]) => `<a href="#/${r}" role="tab" class="${r === now ? 'on' : ''}" aria-selected="${r === now}">${l}</a>`).join('')}</div>`;
 routes.meals = () => {

@@ -111,7 +111,49 @@ export function toCook({ weeks = {}, orders = [], current }) {
   return out;
 }
 
-// 10 ideas: favourites (most chosen) first, then meals not had for longest,
+// How many ideas come from each source (Settings › Meal ideas), saved as
+// household.ideaMix. The total is always the sum of the three, so it can't
+// disagree with them. sites: recipes new on the household's recipe sites;
+// fresh: new dishes Claude invents; favourites: meals they've had before.
+export const IDEA_MIX = { sites: 3, fresh: 3, favourites: 4 };
+export const MIX_MAX = 10;       // per source
+export const MIX_TOTAL_MAX = 15; // all together
+export const MIX_KEYS = ['sites', 'fresh', 'favourites'];
+export function ideaMix(h) {
+  const saved = h?.ideaMix || {};
+  const mix = {};
+  for (const k of MIX_KEYS) {
+    const n = Number(saved[k]);
+    mix[k] = Number.isFinite(n) && saved[k] != null ? Math.max(0, Math.min(MIX_MAX, Math.round(n))) : IDEA_MIX[k];
+  }
+  // Too many in total: trim favourites, then new ideas, then sites.
+  for (const k of ['favourites', 'fresh', 'sites']) {
+    const over = mix.sites + mix.fresh + mix.favourites - MIX_TOTAL_MAX;
+    if (over > 0) mix[k] -= Math.min(mix[k], over);
+  }
+  if (mix.sites + mix.fresh + mix.favourites === 0) mix.favourites = 1;
+  return { ...mix, total: mix.sites + mix.fresh + mix.favourites };
+}
+// The mix for this time: site slots the sites can't fill (no sites, or not
+// enough new recipes on them) become new ideas from Claude instead.
+export function mixFor(mix, siteRecipes = 0) {
+  const sites = Math.min(mix.sites, siteRecipes);
+  return { ...mix, sites, fresh: mix.fresh + mix.sites - sites };
+}
+// Spreads picks across sites in turn (one from each before a second from any),
+// newest first within a site. recipes: [{ source, published }]. Returns the order to try them in.
+export function roundRobin(recipes = []) {
+  const bySite = new Map();
+  for (const r of [...recipes].sort((a, b) => String(b.published || '').localeCompare(String(a.published || '')))) {
+    if (!bySite.has(r.source)) bySite.set(r.source, []);
+    bySite.get(r.source).push(r);
+  }
+  const out = [];
+  for (let i = 0; out.length < recipes.length; i++) for (const list of bySite.values()) if (list[i]) out.push(list[i]);
+  return out;
+}
+
+// Ideas from the meal library: favourites (most chosen) first, then meals not had for longest,
 // skipping anything chosen in the last 2 weeks.
 export function pickIdeas(meals, { count = 10, favourites = 4, today = iso(new Date()) } = {}) {
   // Not ones they said they wouldn't make again (unless they changed their mind since).
