@@ -1,9 +1,9 @@
 // What the screens work out from the live state: the plan for the next shop,
 // its order, the shop lines, the dinners to cook.
-import * as S from './store.js?v=14';
-import { iso, addDays, buildShop, stapleStatus, matchUsual, toCook, currentPlanId, planCmp } from './plan.js?v=14';
-import { icon } from './ui.js?v=14';
-import { st, fmtDay, fmtTime, money, today, run, toMillis } from './core.js?v=14';
+import * as S from './store.js?v=15';
+import { iso, addDays, buildShop, stapleStatus, matchUsual, toCook, currentPlanId, planCmp } from './plan.js?v=15';
+import { icon } from './ui.js?v=15';
+import { st, fmtDay, fmtTime, money, today, run, toMillis } from './core.js?v=15';
 
 export const mealById = id => st.meals.find(m => m.id === id);
 

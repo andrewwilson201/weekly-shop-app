@@ -471,6 +471,7 @@ a.chip:hover { text-decoration: none; }
 .step { display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: 99px; border: 0; background: none; color: var(--text); padding: 0; cursor: pointer; }
 .step:hover { background: var(--surface-3); }
 .step svg { width: 18px; height: 18px; }
+.step:disabled { opacity: .35; cursor: default; background: none; }
 .chip.serves { gap: 4px; padding: 2px 4px 2px 9px; }
 .chip.serves .step { width: 36px; height: 36px; }
 .chip.serves .step svg { width: 13px; height: 13px; }

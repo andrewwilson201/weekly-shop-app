@@ -7,7 +7,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { fetchRecipe, recipeFrom } from './recipe.mjs';
 import { claudeIdeas, claudeIngredients, claudeRecipe } from './ideas-claude.mjs';
 import { recentRecipes, recipeSources } from './feeds.mjs';
-import { pickIdeas, iso, currentPlanId, SKIPS_TO_SUGGEST, learnStaple, recordBought } from '../js/plan.js';
+import { pickIdeas, ideaMix, mixFor, roundRobin, iso, currentPlanId, SKIPS_TO_SUGGEST, learnStaple, recordBought } from '../js/plan.js';
 
 export function makeJobs(db) {
 
@@ -49,14 +49,19 @@ async function makeIdeasInner(h, wid, madeBy, keep) {
   const ref = h.ref.collection('weeks').doc(wid);
   let offered = null, reasons = {}, by = 'rules';
   // from: meal id -> recipe site, for the ideas that came from Settings › Recipe sites.
-  const from = {};
-  const featured = await siteRecipes(h, meals, keep);
+  const from = {}; const usedUrls = new Set();
+  // How many from each source (Settings › Meal ideas). Site slots the sites
+  // can't fill (no sites, or too few new recipes) become new ideas from Claude.
+  const want = ideaMix(h.data());
+  const featured = want.sites ? await siteRecipes(h, meals, keep) : [];
+  const mix = mixFor(want, featured.length);
+  const total = want.total + keep.length;
   try {
     const weeks = (await h.ref.collection('weeks').orderBy('createdAt', 'desc').limit(8).get()).docs.map(d => ({ id: d.id, ...d.data() })).filter(w => w.id !== wid);
     const skipped = (await h.ref.collection('staples').where('skips', '>', 0).get()).docs.map(d => d.data().name);
     const month = new Date().toLocaleDateString('en-GB', { month: 'long', timeZone: 'Europe/London' });
-    const ideas = await claudeIdeas({ meals, weeks, skippedStaples: skipped, notes: h.data().notes || '', month, featured });
-    if (ideas?.length >= 6) {
+    const ideas = await claudeIdeas({ meals, weeks, skippedStaples: skipped, notes: h.data().notes || '', month, featured, mix: want });
+    if (ideas?.length >= Math.max(1, Math.ceil(want.total / 2))) {
       offered = [...keep];
       const b = db.batch();
       for (const i of ideas) {
@@ -72,19 +77,21 @@ async function makeIdeasInner(h, wid, madeBy, keep) {
         if (i.reason) reasons[id] = i.reason;
         // How long it takes, for the idea cards (a recipe's own time wins).
         if (i.time && !i.meal) { const m = meals.find(x => x.id === id); if (m && !m.time && !m.recipe?.time) b.set(h.ref.collection('meals').doc(id), { time: i.time }, { merge: true }); }
-        if (i.from) from[id] = i.from;
+        if (i.from) { from[id] = i.from; usedUrls.add(i.meal?.source || meals.find(x => x.id === id)?.source); }
       }
       await b.commit();
-      // Any the variety check dropped are topped up from the usual picks.
-      if (offered.length < 10 + keep.length) offered.push(...pickIdeas(meals.filter(m => !offered.includes(m.id)), { count: 10 + keep.length - offered.length, today: iso(new Date()) }));
-      offered = offered.slice(0, 10 + keep.length);
       by = 'claude';
     }
   } catch (e) {
     console.log(`Claude ideas failed, using the rules instead: ${e.message}`);
   }
-  if (!offered) offered = [...keep, ...pickIdeas(meals.filter(m => !keep.includes(m.id)), { count: 10 - keep.length, today: iso(new Date()) })];
-  await addSiteRecipes(h, featured, offered, keep, reasons, from);
+  // The rules can't invent dishes, so new-idea slots are meals not offered for a while.
+  if (!offered) offered = [...keep, ...pickIdeas(meals.filter(m => !keep.includes(m.id)), { count: mix.favourites + mix.fresh, favourites: mix.favourites, today: iso(new Date()) })];
+  await addSiteRecipes(h, featured, offered, keep, reasons, from, usedUrls, mix.sites, total);
+  // Any still missing (the variety check dropped some, or a site page wouldn't
+  // read) are topped up from the household's meals.
+  if (offered.length < total) offered.push(...pickIdeas(meals.filter(m => !offered.includes(m.id)), { count: total - offered.length, favourites: 0, today: iso(new Date()) }));
+  offered = offered.slice(0, total);
   // A requested refresh keeps the week's picks (the kept meals stay in the list).
   await ref.set({ offered, reasons, from, ...(madeBy === 'request' ? {} : { picks: {}, createdAt: FieldValue.serverTimestamp() }), madeBy, ideasBy: by, ideasRequested: FieldValue.delete() }, { merge: true });
   const b = db.batch();
@@ -122,25 +129,25 @@ async function fromPage(url) {
   }
 }
 
-// Makes sure each site with new recipes has one in the ideas (Claude may have
-// left it out, or the rules made the ideas). Takes the newest page that has
-// a recipe on it, and puts it in place of the last idea that isn't a pick.
-async function addSiteRecipes(h, featured, offered, keep, reasons, from) {
-  const done = new Set(Object.values(from));
-  for (const site of new Set(featured.map(f => f.source))) {
-    if (done.has(site)) continue;
-    for (const f of featured.filter(x => x.source === site).slice(0, 3)) {
-      let r;
-      try { r = await readRecipe(f.url); } catch (e) { console.log(`Site recipe skipped: ${e.message}`); continue; }
-      const doc = h.ref.collection('meals').doc();
-      await doc.set({ name: r.name || f.title, ingredients: r.ingredients, source: f.url, image: r.image || null, servings: r.servings || null, ...(r.recipe ? { recipe: r.recipe } : {}), idea: true, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: { name: site } });
-      let at = -1;
-      for (let k = offered.length - 1; k >= keep.length; k--) if (!from[offered[k]] && !keep.includes(offered[k])) { at = k; break; }
-      if (offered.length >= 10 + keep.length && at >= 0) offered[at] = doc.id; else offered.push(doc.id);
-      from[doc.id] = site;
-      reasons[doc.id] = `New on ${site} this week.`;
-      break;
-    }
+// Brings the site recipes up to the number asked for (Claude may have left
+// some out, or the rules made the ideas): one from each site in turn, newest
+// first, skipping pages with no recipe on them. Each goes in place of the last
+// idea that isn't a pick or a site recipe when the list is already full.
+async function addSiteRecipes(h, featured, offered, keep, reasons, from, usedUrls, target, total) {
+  let have = offered.filter(id => from[id]).length, tries = 0;
+  for (const f of roundRobin(featured.filter(x => !usedUrls.has(x.url)))) {
+    if (have >= target || tries >= target * 2 + 2) break;
+    tries++;
+    let r;
+    try { r = await readRecipe(f.url); } catch (e) { console.log(`Site recipe skipped: ${e.message}`); continue; }
+    const doc = h.ref.collection('meals').doc();
+    await doc.set({ name: r.name || f.title, ingredients: r.ingredients, source: f.url, image: r.image || null, servings: r.servings || null, ...(r.recipe ? { recipe: r.recipe } : {}), idea: true, timesChosen: 0, createdAt: FieldValue.serverTimestamp(), addedBy: { name: f.source } });
+    let at = -1;
+    for (let k = offered.length - 1; k >= keep.length; k--) if (!from[offered[k]] && !keep.includes(offered[k])) { at = k; break; }
+    if (offered.length >= total && at >= 0) offered[at] = doc.id; else offered.push(doc.id);
+    from[doc.id] = f.source; usedUrls.add(f.url);
+    reasons[doc.id] = `New on ${f.source} this week.`;
+    have++;
   }
 }
 

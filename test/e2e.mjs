@@ -244,6 +244,15 @@ await a.fill('input[name=name][aria-label="Name"]', 'BBC Good Food');
 await a.click('form[data-form=addSource] button');
 await a.waitForSelector('text=BBC Good Food');
 await a.screenshot({ path: `${SHOTS}/05e-recipe-sites.png`, fullPage: true });
+// Settings › Meal ideas: how many from each source; the total is their sum
+assert(await a.isVisible('text=10 ideas each time'), 'ideas default to 3 from sites, 3 new, 4 cooked before');
+await a.click('button[aria-label="More from recipe sites"]');
+await a.waitForSelector('text=11 ideas each time');
+await a.waitForSelector('#toast', { state: 'hidden' });
+await a.locator('.card:has-text("ideas each time")').evaluate(el => el.scrollIntoView({ block: 'center' }));
+await a.screenshot({ path: `${SHOTS}/05f-meal-ideas-mix.png` });
+await a.click('button[aria-label="Fewer from recipe sites"]');
+await a.waitForSelector('text=10 ideas each time');
 await a.click('.btn[data-act=delSource][data-id="1"]');
 await a.waitForSelector('text=BBC Good Food', { state: 'detached' });
 
