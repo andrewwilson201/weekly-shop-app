@@ -1,10 +1,10 @@
 // Next shop: the delivery day and the dinners for the shop being planned.
-import * as S from '../store.js?v=15';
-import { addDays, pickIdeas, ideaMix, awayOn, isIdea, planDate, kidsNote } from '../plan.js?v=15';
-import { icon, tile, avatar } from '../ui.js?v=15';
-import { st, esc, money, fmtDay, today, plural, head, section, empty, run, keep, routes, actions } from '../core.js?v=15';
-import { importLink } from './meals.js?v=15';
-import { mealById, plan, planId, savePlan, planOrder, activeOrder, nextDelivery, orderLine, slotText, flow, stillToCook, askRecipe } from '../state.js?v=15';
+import * as S from '../store.js?v=16';
+import { addDays, pickIdeas, ideaMix, awayOn, isIdea, planDate, kidsNote } from '../plan.js?v=16';
+import { icon, tile, avatar } from '../ui.js?v=16';
+import { st, esc, money, fmtDay, today, plural, head, section, empty, run, keep, routes, actions } from '../core.js?v=16';
+import { importLink } from './meals.js?v=16';
+import { mealById, plan, planId, savePlan, planOrder, activeOrder, nextDelivery, orderLine, slotText, flow, stillToCook, askRecipe } from '../state.js?v=16';
 
 const NEEDS_YOU = ['need_code', 'choose_slot', 'review', 'needs_you'];
 // "35 mins" on an idea card: from its recipe, or Claude's estimate.
@@ -39,16 +39,19 @@ routes.week = () => {
   // Booked ahead in the Sainsbury's app: the delivery can be up to three weeks out.
   const ahead = w.booked || (w.deliveryDate && w.deliveryDate > addDays(today(), 7)) ? 21 : 7;
   html += `<div class="days">`;
-  for (let i = 1; i <= ahead; i++) {
+  // Today too: Sainsbury's often has same-day slots, and a slot reserved in its app for tonight can be filled.
+  for (let i = 0; i <= ahead; i++) {
     const d = addDays(today(), i);
     const off = awayOn(away, d);
-    html += `<button data-act="day" data-id="${d}" class="${w.deliveryDate === d ? 'on' : ''}" ${off ? 'disabled title="Away"' : ''} aria-pressed="${w.deliveryDate === d}"><small>${fmtDay(d, { weekday: 'short' })}</small><b>${fmtDay(d, { day: 'numeric' })}</b><span>${off ? 'Away' : fmtDay(d, { month: 'short' })}</span></button>`;
+    html += `<button data-act="day" data-id="${d}" class="${w.deliveryDate === d ? 'on' : ''}" ${off ? 'disabled title="Away"' : ''} aria-pressed="${w.deliveryDate === d}"><small>${i ? fmtDay(d, { weekday: 'short' }) : 'Today'}</small><b>${fmtDay(d, { day: 'numeric' })}</b><span>${off ? 'Away' : fmtDay(d, { month: 'short' })}</span></button>`;
   }
   html += `</div>`;
   html += `<label class="card booked row nowrap"><span class="grow"><b>Already booked in the Sainsbury's app?</b>
     <span class="small muted">${w.booked
-      ? `This shop goes into the order you booked${w.deliveryDate ? ` for ${fmtDay(w.deliveryDate)}` : ''}, instead of a new slot. Anything you added to get over the minimum can come out when you check the total.`
-      : 'Turn this on if you\'ve booked the slot and checked out already. The app adds this shop to that order.'}</span></span>
+      ? w.deliveryDate
+        ? `This shop goes into what you booked for ${fmtDay(w.deliveryDate)}: an order you checked out, or a slot you reserved and didn't. If more than one booking is near that day, you choose. Anything you added to get over the minimum can come out when you check the total.`
+        : 'Tap the day you booked, so the app finds that booking and leaves any others alone.'
+      : 'Turn this on if you\'ve booked a slot in the Sainsbury\'s app, checked out or not. The app puts this shop into that booking.'}</span></span>
     <input type="checkbox" class="switch" data-change="booked" ${w.booked ? 'checked' : ''} aria-label="Already booked in the Sainsbury's app"></label>`;
   html += section('2. Pick your dinners', { right: `<span class="small muted">${w.ideasBy === 'claude' ? 'Ideas by Claude' : 'From your meals'}</span>` });
   html += dishBox();
@@ -100,8 +103,9 @@ actions.pick = el => run(() => {
   if (!picks[id] && isIdea(mealById(id) || {})) S.updateH(['meals', id], { idea: false }).catch(e => console.error(e));
   return S.updateH(['weeks', planId()], { [`picks.${id}`]: picks[id] ? S.deleteField() : S.me() });
 });
-actions.day = el => run(() => savePlan({ deliveryDate: el.dataset.id }));
-actions.booked = el => run(() => savePlan({ booked: el.checked }), el.checked ? 'This shop will go into the order you booked' : 'A new slot will be booked');
+// A day picked on a plan whose old day had gone by starts "already booked" afresh too.
+actions.day = el => run(() => savePlan({ deliveryDate: el.dataset.id, ...(st.weeks[planId()]?.booked && !plan()?.booked ? { booked: false } : {}) }));
+actions.booked = el => run(() => savePlan({ booked: el.checked }), el.checked ? 'This shop will go into what you booked' : 'A new slot will be booked');
 actions.addIdea = () => { location.hash = '#/meals'; };
 // Put this plan aside (for when the shop was done another way) and start a new one.
 actions.startAfresh = () => {

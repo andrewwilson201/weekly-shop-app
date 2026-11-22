@@ -1,9 +1,9 @@
 // What the screens work out from the live state: the plan for the next shop,
 // its order, the shop lines, the dinners to cook.
-import * as S from './store.js?v=15';
-import { iso, addDays, buildShop, stapleStatus, matchUsual, toCook, currentPlanId, planCmp } from './plan.js?v=15';
-import { icon } from './ui.js?v=15';
-import { st, fmtDay, fmtTime, money, today, run, toMillis } from './core.js?v=15';
+import * as S from './store.js?v=16';
+import { iso, addDays, buildShop, stapleStatus, matchUsual, toCook, currentPlanId, planCmp } from './plan.js?v=16';
+import { icon } from './ui.js?v=16';
+import { st, fmtDay, fmtTime, money, today, run, toMillis } from './core.js?v=16';
 
 export const mealById = id => st.meals.find(m => m.id === id);
 
@@ -11,7 +11,14 @@ export const mealById = id => st.meals.find(m => m.id === id);
 // One plan per shop, not per calendar week (plan.js currentPlanId): it stays
 // open until it's ordered, then the next one starts.
 export const planId = () => currentPlanId(st.weeks, today());
-export const plan = () => st.weeks[planId()];
+// A delivery day that has gone by (a shop started a while ago and not ordered)
+// doesn't count: the day has to be picked again, and "already booked" with it.
+export const plan = () => {
+  const w = st.weeks[planId()];
+  if (!w?.deliveryDate || w.deliveryDate >= today()) return w;
+  const { deliveryDate, booked, ...rest } = w;
+  return rest;
+};
 // Save to the current plan, creating it if it's new (createdAt is how plans
 // are listed, so a plan without one would vanish).
 export const savePlan = data => S.setH(['weeks', planId()], plan() ? data : { offered: [], picks: {}, ...data, createdAt: S.serverTimestamp() });

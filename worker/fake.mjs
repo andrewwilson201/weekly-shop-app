@@ -31,6 +31,12 @@ export class FakeSainsburys {
     if (process.env.FAKE_SLOT_GONE && !this.goneOnce) { this.goneOnce = true; const e = new Error('POST /slot/v1/slot/reservation → 400'); e.status = 400; e.detail = 'Sorry this slot is no longer available.'; throw e; }
     return { reserved_until: new Date(Date.now() + 2 * 36e5).toISOString(), slot }; }
   async release() {}
+  // FAKE_HELD=1: a slot reserved in the Sainsbury's app (not checked out) for tomorrow at 18:00.
+  async reservation() {
+    if (!process.env.FAKE_HELD) return { is_expired: true };
+    const start = new Date(Date.now() + 864e5); start.setUTCHours(18, 0, 0, 0);
+    return { slot: { start_time: start.toISOString().replace('.000', ''), end_time: new Date(start.getTime() + 36e5).toISOString().replace('.000', '') }, reserved_until: new Date(Date.now() + 90 * 60000).toISOString() };
+  }
   async basket() {
     const subtotal = this.items.reduce((t, i) => t + i.subtotal_price, 0);
     return { items: this.items, subtotal_price: subtotal, total_price: subtotal + 1, slot_price: 1, savings: 0, minimum_spend: 25, has_exceeded_minimum_spend: subtotal >= 25 };

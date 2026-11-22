@@ -321,3 +321,23 @@ test('orders booked in the Sainsbury\'s app: upcoming and changeable ones near t
   assert.deepEqual(ordersNear(up, '2026-11-17', true).map(o => o.orderNumber), ['1'], 'a plan marked booked looks a little further');
   assert.deepEqual(upcomingOrders([{ order_uid: 7, slot_start_time: '2026-11-15T23:30:00Z' }], now)[0].date, '2026-11-15');
 });
+
+test('a slot reserved in the Sainsbury\'s app, and when a booking is used without asking', async () => {
+  const { heldSlot, bookedChoice } = await import('../js/plan.js');
+  const now = new Date('2026-11-22T08:00:00Z');
+  const raw = { slot: { start_time: '2026-11-22T19:00:00Z', end_time: '2026-11-22T20:00:00Z' }, reserved_until: '2026-11-22T09:30:00Z' };
+  assert.equal(heldSlot(raw, now).date, '2026-11-22');
+  assert.equal(heldSlot({ reservation: raw }, now).start_time, '2026-11-22T19:00:00Z', 'wrapped in { reservation }');
+  assert.equal(heldSlot({ ...raw, is_expired: true }, now), null, 'released');
+  assert.equal(heldSlot({ ...raw, reserved_until: '2026-11-22T08:05:00Z' }, now), null, 'about to run out');
+  assert.equal(heldSlot({ slot: { start_time: '2026-11-22T07:00:00Z' } }, now), null, 'delivery already gone');
+  assert.equal(heldSlot(null, now), null);
+  const held = heldSlot(raw, now);
+  const xmas = { orderNumber: '9', date: '2026-12-23' };
+  const sun = { orderNumber: '8', date: '2026-11-22' };
+  assert.deepEqual(bookedChoice([], held, '2026-11-22', true), { kind: 'held', date: '2026-11-22', id: 'held' });
+  assert.equal(bookedChoice([], held, '2026-11-22', false), null, 'not marked booked: always asked');
+  assert.equal(bookedChoice([], held, '2026-11-23', true), null, 'not on the picked day: asked');
+  assert.equal(bookedChoice([sun], held, '2026-11-22', true), null, 'two bookings: asked');
+  assert.deepEqual(bookedChoice([xmas], null, '2026-12-23', true).id, '9');
+});
