@@ -34,7 +34,7 @@ async function makeShop(opts) {
   const { Sainsburys: Real } = await import('./sainsburys.mjs');
   return new Real(opts);
 }
-import { iso, daysBetween, upcomingOrders, ordersNear, usualCandidates, searchTerms, cheapestSwap, priceChange } from '../js/plan.js';
+import { iso, daysBetween, upcomingOrders, ordersNear, heldSlot, bookedChoice, usualCandidates, searchTerms, cheapestSwap, priceChange } from '../js/plan.js';
 
 // The worker's own key if it has one (database and notifications only), else the deploy key.
 const sa = process.env.WORKER_SERVICE_ACCOUNT || process.env.FIREBASE_SERVICE_ACCOUNT;
@@ -156,7 +156,7 @@ async function processOrder({ h, ref }) {
   const heartbeat = setInterval(() => ref.update({ workerAt: FieldValue.serverTimestamp() }).catch(() => {}), 60000);
 
   const shop = await makeShop({ store: h.data().store || '0031', log: m => log(m) });
-  let reserved = false, slotDate = null, amending = false, placedDone = false;
+  let reserved = false, ownSlot = false, slotDate = null, amending = false, placedDone = false;
   let amendNo = null; // the Sainsbury's order being added to, if it isn't a new one
   try {
     if (order.cancelRequested) throw new Cancelled();
@@ -190,11 +190,14 @@ async function processOrder({ h, ref }) {
       slotDate = opened.slotDate;
       await update({ slot: opened.slot ? { start_time: opened.slot.start_time, end_time: opened.slot.end_time || '' } : null, ...(opened.slot?.start_time ? { deliveryDate: londonDate(opened.slot.start_time) } : {}) });
     } else {
-      reserved = true;
+      // A slot they reserved in the Sainsbury's app is theirs: a cancel or a
+      // trial leaves it reserved rather than letting it go.
+      ownSlot = !!picked.ownSlot;
+      reserved = !ownSlot;
       // The slot can be on a different day from the one picked in the plan (slots
       // around that day are offered): from here the order is for the slot's day.
       await update({ state: 'filling', message: FieldValue.delete(), deliveryDate: londonDate(res.slot.start_time), slot: { start_time: res.slot.start_time, end_time: res.slot.end_time, reserved_until: res.reserved_until } });
-      await log(`Booked ${choice}`);
+      await log(picked.ownSlot ? `Filling the basket for the slot reserved at ${choice}` : `Booked ${choice}`);
       slotDate = res.slot.start_time.slice(0, 10);
     }
 
@@ -345,7 +348,7 @@ async function processOrder({ h, ref }) {
       for (const [u, q] of removedQty) await shop.add(u, q, slotDate).catch(() => {});
       if (amending) { await shop.cancelAmend().catch(e => log(`Couldn't cancel the changes: ${e.message}`)); amending = false; }
       if (reserved) { await shop.release().catch(() => {}); reserved = false; }
-      const after = amendNo ? 'the changes were cancelled, so your order is as it was' : 'the slot was released';
+      const after = amendNo ? 'the changes were cancelled, so your order is as it was' : ownSlot ? 'the slot you reserved is still yours' : 'the slot was released';
       await update(checked
         ? { state: 'trial_done', checkoutTotal: checked.total, card: checked.card || '', message: `Trial finished. Everything worked up to ${amendNo ? 'saving the changes' : 'Place order'}: Sainsbury's checkout showed £${Number(checked.total).toFixed(2)}${checked.card ? ` with ${checked.card}` : ''}. Nothing was paid, the items it added were taken out again and ${after}.` }
         : { state: 'failed', message: `Trial: the basket was filled, but checkout didn't work: ${why} Nothing was paid; the items it added were taken out and ${after}.` });
@@ -388,7 +391,7 @@ async function processOrder({ h, ref }) {
       if ((order.trial || amendNo) && slotDate) for (const l of (await read()).lines || []) if (l.result === 'added' && l.uid) await shop.remove(l.uid, l.qty || 1, slotDate).catch(() => {});
       if (amending) await shop.cancelAmend().catch(() => {});
       if (reserved) await shop.release().catch(() => {});
-      await update({ state: 'cancelled', message: order.trial ? `Trial cancelled. ${amendNo ? 'The changes were cancelled' : 'The slot was released'} and anything it added was taken out again.` : amendNo ? 'Cancelled. What it added was taken out again and the order is as it was. Check the Sainsbury\'s app if you want to be sure.' : 'Cancelled. The slot was released; anything already in the basket was left there.' });
+      await update({ state: 'cancelled', message: order.trial ? `Trial cancelled. ${amendNo ? 'The changes were cancelled' : 'The slot was released'} and anything it added was taken out again.` : amendNo ? 'Cancelled. What it added was taken out again and the order is as it was. Check the Sainsbury\'s app if you want to be sure.' : ownSlot ? 'Cancelled. The slot you reserved is still yours; anything already in the basket was left there.' : 'Cancelled. The slot was released; anything already in the basket was left there.' });
       await log('Cancelled');
     } else if (e.code === 'BANK_CHECK') {
       await update({ state: 'needs_you', message: e.message });
@@ -423,16 +426,32 @@ async function chooseSlot({ h, order, shop, update, log, waitFor }) {
   try { existing = ordersNear(upcomingOrders(await shop.orders()), day, !!order.booked); }
   catch (e) { await log(`Couldn't read the orders already booked on Sainsbury's (${e.status || e.message}), so only new slots are offered`); }
   if (existing.length) await log(`${existing.length} order${existing.length === 1 ? '' : 's'} already booked around ${day}`);
+  // A slot reserved in the Sainsbury's app without checking out (not an order yet).
+  let held = null;
+  try { held = heldSlot(await shop.reservation()); }
+  catch (e) { await log(`Couldn't check for a slot reserved in the Sainsbury's app (${e.status || e.message})`); }
+  if (held && Math.abs(daysBetween(day, held.date)) > (order.booked ? 3 : 1)) held = null;
+  if (held) await log(`A slot is reserved for ${held.date} (not checked out yet)`);
+  const useHeld = async () => {
+    await log(`Using the slot reserved for ${held.date}`);
+    await update({ existing: FieldValue.delete(), held: FieldValue.delete(), slots: FieldValue.delete() });
+    // Sainsbury's didn't say when the hold ends: assume an hour, to be safe.
+    const until = held.reserved_until || new Date(Date.now() + 60 * 60000).toISOString();
+    return { res: { slot: { start_time: held.start_time, end_time: held.end_time }, reserved_until: until }, choice: held.start_time, ownSlot: true };
+  };
   const useOrder = async (num, how) => {
     const ex = existing.find(o => o.orderNumber === num);
     await log(`${how} the order booked for ${ex?.date || 'then'}`);
-    await update({ addTo: ex ? { orderNumber: num, start_time: ex.start_time, end_time: ex.end_time, total: ex.total } : { orderNumber: num }, existing: FieldValue.delete(), slots: FieldValue.delete() });
+    await update({ addTo: ex ? { orderNumber: num, start_time: ex.start_time, end_time: ex.end_time, total: ex.total } : { orderNumber: num }, existing: FieldValue.delete(), held: FieldValue.delete(), slots: FieldValue.delete() });
     return { amendNo: num };
   };
-  if (order.booked && existing.length === 1) return useOrder(existing[0].orderNumber, 'Using');
-  const bookedNote = order.booked && !existing.length
-    ? `Couldn't find an order booked on Sainsbury's around ${day} that can still be changed. Pick a time to book a new slot, or cancel and check the Sainsbury's app.`
-    : null;
+  // Only one thing booked, on the very day picked: use it. Anything else is asked.
+  const auto = bookedChoice(existing, held, day, !!order.booked);
+  if (auto?.kind === 'order') return useOrder(auto.id, 'Using');
+  if (auto?.kind === 'held') return useHeld();
+  const bookedNote = order.booked && !existing.length && !held
+    ? `Couldn't find an order or a reserved slot on Sainsbury's around ${day}. Pick a time to book a new slot, or cancel and check the Sainsbury's app.`
+    : order.booked ? 'More than one booking is near that day, or it isn\'t on the day you picked. Choose which one this shop goes into, or book a new slot.' : null;
 
   // Slots: the chosen day and the day either side. If Sainsbury's says the
   // picked one has gone, the list is refreshed and offered again (3 tries).
@@ -443,14 +462,15 @@ async function chooseSlot({ h, order, shop, update, log, waitFor }) {
   let near = await nearSlots();
   for (let attempt = 1; ; attempt++) {
     const msg = attempt > 1 ? 'Sainsbury\'s says that slot has just gone. Pick another one.' : bookedNote;
-    await update({ state: 'choose_slot', slots: near.map(({ booking_key, ...s }) => s), existing, slotChoice: FieldValue.delete(), ...(msg ? { message: msg } : {}) });
+    await update({ state: 'choose_slot', slots: near.map(({ booking_key, ...s }) => s), existing, held: held || FieldValue.delete(), slotChoice: FieldValue.delete(), ...(msg ? { message: msg } : {}) });
     await log(`${near.length} free slots around ${day}`);
-    if (attempt === 1) await notify(h, existing.length
-      ? { title: 'Add to your order, or pick a time', body: 'You already have a Sainsbury\'s order around then. Add this shop to it, or book a new slot.', link: '#/order', tag: 'order' }
+    if (attempt === 1) await notify(h, existing.length || held
+      ? { title: 'Add to your order, or pick a time', body: 'You already have something booked on Sainsbury\'s around then. Use it, or book a new slot.', link: '#/order', tag: 'order' }
       : { title: 'Pick a delivery time', body: `${near.length} free slots around your chosen day.`, link: '#/order', tag: 'order' });
     const choice = await waitFor(d => d.slotChoice, 30);
     if (!choice) throw new Error('No delivery time was picked within 30 minutes.');
     if (choice.startsWith('order:')) return useOrder(choice.slice(6), 'Adding to');
+    if (choice === 'held' && held) return useHeld();
     // Keys can go stale: refresh before booking.
     const slot = (await shop.slots([1, 2, 3])).find(s => s.start_time === choice) || near.find(s => s.start_time === choice);
     try {

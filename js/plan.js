@@ -495,3 +495,29 @@ export function upcomingOrders(raw = [], now = new Date()) {
 export function ordersNear(list = [], day, booked = false) {
   return list.filter(o => Math.abs(daysBetween(day, o.date)) <= (booked ? 3 : 1));
 }
+// A slot reserved in the Sainsbury's app without checking out. It isn't an
+// order, but the account holds it (about 2 hours) and the basket can be filled
+// for it. GET /slot/v1/slot/reservation; reserving returns the same shape
+// ({ slot: { start_time, end_time }, reserved_until }), and a released one says
+// is_expired. Returns { start_time, end_time, reserved_until, date } while it
+// still has `minLeft` minutes to run and the delivery is still to come, else null.
+export function heldSlot(raw, now = new Date(), minLeft = 15) {
+  const r = raw?.reservation || raw;
+  if (!r || r.is_expired === true) return null;
+  const slot = r.slot || r;
+  const start = slot.start_time || r.slot_start_time;
+  if (!start || new Date(start) <= now) return null;
+  const until = r.reserved_until || r.reservation_expiry || r.expiry_time || '';
+  if (until && new Date(until) - now < minLeft * 60000) return null;
+  return { start_time: start, end_time: slot.end_time || r.slot_end_time || '', reserved_until: until, date: iso(start) };
+}
+// What a shop delivering on `day` could go into besides a new slot: orders
+// already booked and a reserved slot, all near the day. Something is only
+// used without asking when the plan is marked "already booked" and exactly one
+// thing is on the picked day itself, and nothing else is near: with two or
+// more (an order before Christmas and a slot for tonight), the household picks.
+export function bookedChoice(existing = [], held = null, day, booked = false) {
+  if (!booked) return null;
+  const all = [...existing.map(o => ({ kind: 'order', date: o.date, id: o.orderNumber })), ...(held ? [{ kind: 'held', date: held.date, id: 'held' }] : [])];
+  return all.length === 1 && all[0].date === day ? all[0] : null;
+}

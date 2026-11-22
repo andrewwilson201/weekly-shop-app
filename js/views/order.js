@@ -1,9 +1,9 @@
 // Order: one run of the order helper (worker/run.mjs), from the SMS code to
 // the placed order. Also "Add to this order" for a placed one.
-import * as S from '../store.js?v=15';
-import { icon } from '../ui.js?v=15';
-import { st, esc, money, fmtDay, fmtTime, today, plural, head, section, empty, run, render, toast, toMillis, keep, route, arg, routes, actions } from '../core.js?v=15';
-import { DONE_STATES, STEPS, activeOrder, isStale, flow, planId, startOrder, startAmend, slotText, findOrder } from '../state.js?v=15';
+import * as S from '../store.js?v=16';
+import { icon } from '../ui.js?v=16';
+import { st, esc, money, fmtDay, fmtTime, today, plural, head, section, empty, run, render, toast, toMillis, keep, route, arg, routes, actions } from '../core.js?v=16';
+import { DONE_STATES, STEPS, activeOrder, isStale, flow, planId, startOrder, startAmend, slotText, findOrder } from '../state.js?v=16';
 
 const CODE_MINUTES = 10; // worker/run.mjs: how long Sainsbury's code is waited for
 const HERO = {
@@ -31,7 +31,7 @@ function hero(o) {
   if (o.addTo && o.state === 'review') return ['bag', 'warn', 'Check the order and approve', 'This shop goes into the order you booked. Nothing changes until you approve.'];
   if (o.addTo && o.state === 'filling') return ['cart', '', 'Adding to your order', 'Opening the order you booked and adding everything. This takes a minute or two.'];
   if (o.addTo && o.state === 'placed') return ['check', '', 'Order updated', `Your shop is in the order you booked${o.orderNumber ? ` (${esc(o.orderNumber)})` : ''}. Staples, meals and the list have been updated.`];
-  if (o.state === 'choose_slot' && o.existing?.length) return ['calendar', 'warn', 'Add to your order, or pick a time', 'You already have a Sainsbury\'s order around then.'];
+  if (o.state === 'choose_slot' && (o.existing?.length || o.held)) return ['calendar', 'warn', 'Use what you booked, or pick a time', o.existing?.length && o.held ? 'You have more than one booking on Sainsbury\'s around then. Choose the one this shop goes into.' : o.held ? 'You reserved a slot in the Sainsbury\'s app around then.' : 'You already have a Sainsbury\'s order around then.'];
   if (o.state === 'needs_you' && o.finishedElsewhere) return ['clock', '', 'Marking it as ordered', 'Updating staples, meals and the list. This takes a few seconds.'];
   if (o.amend && o.state === 'placed') return ['check', '', 'Order updated', 'What you added is in the order, and off the list.'];
   if (o.state === 'need_code') {
@@ -81,16 +81,20 @@ routes.order = () => {
     const slots = (o.slots || []);
     const days = [...new Set(slots.map(s => s.date))];
     // Orders already booked in the Sainsbury's app around the day: add this shop to one.
-    if (o.existing?.length) {
-      html += section('Already booked') + `<div class="card flush"><ul class="list">` + o.existing.map(x => {
+    // A slot reserved in the Sainsbury's app without checking out: fill the basket for it.
+    const held = o.held ? `<li><span class="grow"><span class="name">${fmtDay(o.held.date, { weekday: 'long', day: 'numeric', month: 'short' })}, ${fmtTime(o.held.start_time)}${o.held.end_time ? `–${fmtTime(o.held.end_time)}` : ''}</span>
+          <span class="meta">Slot you reserved, not checked out yet${o.held.reserved_until ? ` · held until ${fmtTime(o.held.reserved_until)}` : ''}</span></span>
+          <button class="btn small primary" data-act="slot" data-id="held" ${o.slotChoice ? 'disabled' : ''}>${o.slotChoice === 'held' ? 'Using it…' : 'Use this slot'}</button></li>` : '';
+    if (o.existing?.length || held) {
+      html += section('Already booked') + `<div class="card flush"><ul class="list">` + held + (o.existing || []).map(x => {
         const id = `order:${x.orderNumber}`;
         return `<li><span class="grow"><span class="name">${fmtDay(x.date, { weekday: 'long', day: 'numeric', month: 'short' })}${x.start_time ? `, ${fmtTime(x.start_time)}${x.end_time ? `–${fmtTime(x.end_time)}` : ''}` : ''}</span>
           <span class="meta">Order ${esc(x.orderNumber)}${x.total ? ` · ${money(x.total)} so far` : ''}</span></span>
           <button class="btn small primary" data-act="slot" data-id="${esc(id)}" ${o.slotChoice ? 'disabled' : ''}>${o.slotChoice === id ? 'Opening…' : 'Add to this order'}</button></li>`;
-      }).join('') + `</ul><p class="tiny muted" style="margin:0;padding:0 16px 12px">Anything you put in to get over the minimum shows on the next screen, where you can take it out.</p></div>`;
+      }).join('') + `</ul>${o.existing?.length ? '<p class="tiny muted" style="margin:0;padding:0 16px 12px">Anything you put in to get over the minimum shows on the next screen, where you can take it out.</p>' : ''}</div>`;
       html += section('Or book a new slot');
     }
-    html += `<div class="card">${o.slotChoice && !o.slotChoice.startsWith('order:') ? '<p class="small muted">Booking it…</p>' : ''}`;
+    html += `<div class="card">${o.slotChoice && !o.slotChoice.startsWith('order:') && o.slotChoice !== 'held' ? '<p class="small muted">Booking it…</p>' : ''}`;
     if (!slots.length) html += `<p class="muted">No free slots around that day.</p>`;
     for (const d of days) {
       html += `<div class="slot-day">${fmtDay(d, { weekday: 'long', day: 'numeric', month: 'short' })}</div><div class="slots">` +
