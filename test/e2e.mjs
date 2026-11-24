@@ -550,9 +550,60 @@ await a.goto(`${BASE}#/settings`);
   assert(true, 'adding to a booked order can be cancelled');
 }
 
+const d = n => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+// Orders placed outside the app (worker/outside.mjs). Two staples are made to
+// look bought a while ago (the e2e order just bought everything), then the
+// pretend shop has an order from yesterday with one of them in it.
+{
+  const API = 'http://localhost:8081/v1/projects/weekly-shop-177b1/databases/(default)/documents';
+  const auth = { Authorization: 'Bearer owner', 'Content-Type': 'application/json' };
+  const hid = (await (await fetch(`${API}/households`, { headers: auth })).json()).documents[0].name.split('/').pop();
+  const old = d(-10);
+  for (const uid of ['9000003', '9000004']) {
+    const res = await fetch(`${API}/households/${hid}/staples/${uid}?updateMask.fieldPaths=last_bought&updateMask.fieldPaths=every_days&updateMask.fieldPaths=skipped_on&updateMask.fieldPaths=skips`, { method: 'PATCH', headers: auth, body: JSON.stringify({ fields: { last_bought: { stringValue: old }, every_days: { integerValue: '7' }, skips: { integerValue: '0' } } }) });
+    if (!res.ok) throw new Error(`Couldn't change staple ${uid}: ${res.status}`);
+  }
+  const outEnv = (uids, no) => ({ ...process.env, FAKE_OUTSIDE: uids, FAKE_OUTSIDE_NO: no, SAINSBURYS_FAKE: '1', CLAUDE_FAKE: '1', SAINSBURYS_EMAIL: 'x', SAINSBURYS_PASSWORD: 'y', FIRESTORE_EMULATOR_HOST: 'localhost:8081', WORKER_MINUTES: '5' });
+  // Settings › Check Sainsbury's for other orders
+  await a.goto(`${BASE}#/settings`);
+  await a.click('button:has-text("Check Sainsbury\'s for other orders")');
+  await a.waitForSelector('h1:has-text("Orders placed outside the app")');
+  const w6 = spawn(process.execPath, ['worker/run.mjs'], { env: outEnv('9000004,9999999', '1000000004'), stdio: 'inherit' });
+  const w6Done = new Promise(r => w6.on('exit', r));
+  await a.waitForSelector('input.code', { timeout: 30000 });
+  await a.fill('input.code', '123456'); await a.click('text=Send code');
+  await a.waitForSelector('h3:has-text("Checked your Sainsbury\'s orders")', { timeout: 30000 });
+  await w6Done;
+  assert(await a.isVisible('text=1 staple in it now counts as bought'), 'a check counts the staples in an order placed outside the app');
+  await a.screenshot({ path: `${SHOTS}/26-outside-check.png`, fullPage: true });
+  await a.goto(`${BASE}#/staples`);
+  await a.waitForSelector('[data-group=not_due] .meta:has-text("(outside the app)")', { state: 'attached' });
+  assert(await a.locator('[data-group=not_due] li:has-text("Bananas")').count() === 1, 'the staple shows it was bought outside the app, and is not due (even an every-week one)');
+  // An order run finds another one, leaves bread out, and it can be put back.
+  await a.goto(`${BASE}#/settings`);
+  await a.click('button:has-text("Start a trial run")');
+  await a.waitForSelector('text=Trial run · nothing is paid');
+  const w7 = spawn(process.execPath, ['worker/run.mjs'], { env: outEnv('9000003', '1000000005'), stdio: 'inherit' });
+  const w7Done = new Promise(r => w7.on('exit', r));
+  await a.waitForSelector('input.code', { timeout: 30000 });
+  await a.fill('input.code', '123456'); await a.click('text=Send code');
+  await a.waitForSelector('.slots button', { timeout: 30000 });
+  await a.click('.slots button >> nth=0');
+  await a.waitForSelector('text=Left out, bought lately', { timeout: 30000 });
+  assert(await a.isVisible('li:has-text("Wholemeal bread") button:has-text("Put it back")'), 'an order run leaves out a staple an outside order bought');
+  assert(!(await a.isVisible('.notice.warn:has-text("not added") >> text=Wholemeal bread')), 'it isn\'t reported as not added');
+  await a.screenshot({ path: `${SHOTS}/27-outside-left-out.png`, fullPage: true });
+  await a.click('li:has-text("Wholemeal bread") button:has-text("Put it back")');
+  await a.waitForSelector('text=Left out, bought lately', { state: 'detached', timeout: 30000 });
+  await a.click('summary:has-text("Everything in the basket")');
+  assert(await a.isVisible('text=9000003') || await a.locator('.list li:has-text("9000003")').count() > 0, 'put back adds it to the basket');
+  await a.click('button.btn.outline.danger[data-act=cancelOrder]');
+  await a.waitForSelector('h3:has-text("Cancelled")', { timeout: 30000 });
+  await w7Done;
+}
+
 // Holiday mode
 await a.goto(`${BASE}#/settings`);
-const d = n => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
 await a.fill('form[data-form=addAway] input[name=from]', d(0));
 await a.fill('form[data-form=addAway] input[name=to]', d(10));
 await a.click('form[data-form=addAway] button');

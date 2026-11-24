@@ -1,9 +1,9 @@
 // What the screens work out from the live state: the plan for the next shop,
 // its order, the shop lines, the dinners to cook.
-import * as S from './store.js?v=16';
-import { iso, addDays, buildShop, stapleStatus, matchUsual, toCook, currentPlanId, planCmp } from './plan.js?v=16';
-import { icon } from './ui.js?v=16';
-import { st, fmtDay, fmtTime, money, today, run, toMillis } from './core.js?v=16';
+import * as S from './store.js?v=17';
+import { iso, addDays, buildShop, stapleStatus, matchUsual, toCook, currentPlanId, planCmp } from './plan.js?v=17';
+import { icon } from './ui.js?v=17';
+import { st, fmtDay, fmtTime, money, today, run, toMillis } from './core.js?v=17';
 
 export const mealById = id => st.meals.find(m => m.id === id);
 
@@ -28,13 +28,13 @@ export const pickedMeals = () => Object.keys(plan()?.picks || {}).map(mealById).
 export const householdServes = () => Number(st.household?.serves) || 4;
 
 // ---------- orders ----------
-export const DONE_STATES = ['placed', 'failed', 'cancelled', 'trial_done'];
+export const DONE_STATES = ['placed', 'failed', 'cancelled', 'trial_done', 'checked'];
 export const START_MINUTES = 15; // worker/run.mjs: a request older than this isn't started
 export const activeOrder = () => st.orders.find(o => !DONE_STATES.includes(o.state));
 // The current plan's order, running or placed.
 export const planOrder = () => {
   const a = activeOrder();
-  if (a && !a.trial && !a.amend) return a;
+  if (a && !a.trial && !a.amend && !a.check) return a;
   return st.orders.find(o => o.state === 'placed' && o.week === planId() && !o.trial && !o.amend);
 };
 // The next delivery on its way (shown on the home screen until the day).
@@ -54,7 +54,7 @@ export const STEPS = [
   ['placing', 'Placing the order'],
   ['placed', 'Ordered'],
 ];
-export const stateLabel = s => ({ failed: 'Stopped', cancelled: 'Cancelled', needs_you: 'Needs you', trial_done: 'Trial finished' }[s] || (STEPS.find(x => x[0] === s) || [, s])[1]);
+export const stateLabel = s => ({ failed: 'Stopped', cancelled: 'Cancelled', needs_you: 'Needs you', trial_done: 'Trial finished', checked: 'Checked' }[s] || (STEPS.find(x => x[0] === s) || [, s])[1]);
 export const slotText = o => (o.slot ? `${fmtTime(o.slot.start_time)}–${fmtTime(o.slot.end_time)}` : '');
 export const orderLine = o => o.state === 'placed'
   ? `${fmtDay(o.deliveryDate)}${o.slot ? `, ${slotText(o)}` : ''}${o.total ? ` · ${money(o.total)}` : ''}`
@@ -102,6 +102,13 @@ export const startOrder = trial => run(async () => {
   });
   if (!trial && !plan()) await savePlan({ deliveryDate: w.deliveryDate });
   location.hash = '#/order';
+});
+// Settings › "Check Sainsbury's for other orders": logs in (SMS code) and
+// counts what orders placed outside the app bought (worker/outside.mjs).
+export const startCheck = () => run(async () => {
+  if (activeOrder()) { location.hash = '#/order'; return; }
+  const ref = await S.addH(['orders'], { check: true, deliveryDate: today(), state: 'requested', lines: [], requestedBy: S.me(), createdAt: S.serverTimestamp(), log: [] });
+  location.hash = `#/order/${ref.id}`;
 });
 // "Add to this order": whatever is on the shared list now, added to a placed
 // order before Sainsbury's cut-off (worker/run.mjs, amend).

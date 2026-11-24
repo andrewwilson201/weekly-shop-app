@@ -1,14 +1,14 @@
 // Staples: things bought regularly, learned from past orders.
-import * as S from '../store.js?v=16';
-import { addDays, stapleStatus, skipRule } from '../plan.js?v=16';
-import { icon } from '../ui.js?v=16';
-import { st, esc, fmtDay, today, head, section, empty, run, keep, routes, actions } from '../core.js?v=16';
-import { deliveryDate } from '../state.js?v=16';
-import { libTabs } from './meals.js?v=16';
+import * as S from '../store.js?v=17';
+import { addDays, stapleStatus, skipRule } from '../plan.js?v=17';
+import { icon } from '../ui.js?v=17';
+import { st, esc, fmtDay, today, head, section, empty, run, keep, routes, actions } from '../core.js?v=17';
+import { deliveryDate } from '../state.js?v=17';
+import { libTabs } from './meals.js?v=17';
 
 // Only what's due is open; the rest is folded away so the screen stays short.
 const GROUPS = [['add', 'Due this shop'], ['suggest', 'For meals, when needed'], ['not_due', 'Not due yet'], ['lapsed', 'Not bought lately'], ['dropped', 'Turned off']];
-const how = s => [skipRule(s) === 'every_week' ? 'Every week' : s.every_days ? `About every ${s.every_days} days` : '', s.last_bought ? `last ${fmtDay(s.last_bought)}` : ''].filter(Boolean).join(' · ');
+const how = s => [skipRule(s) === 'every_week' ? 'Every week' : s.every_days ? `About every ${s.every_days} days` : '', s.last_bought ? `last ${fmtDay(s.last_bought)}${s.outside?.date === s.last_bought && !s.outside.inOrder ? ' (outside the app)' : ''}` : ''].filter(Boolean).join(' · ');
 function row(s) {
   const swaps = st.household.cheaperSwaps !== false;
   const more = [
