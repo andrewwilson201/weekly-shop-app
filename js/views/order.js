@@ -1,9 +1,9 @@
 // Order: one run of the order helper (worker/run.mjs), from the SMS code to
 // the placed order. Also "Add to this order" for a placed one.
-import * as S from '../store.js?v=16';
-import { icon } from '../ui.js?v=16';
-import { st, esc, money, fmtDay, fmtTime, today, plural, head, section, empty, run, render, toast, toMillis, keep, route, arg, routes, actions } from '../core.js?v=16';
-import { DONE_STATES, STEPS, activeOrder, isStale, flow, planId, startOrder, startAmend, slotText, findOrder } from '../state.js?v=16';
+import * as S from '../store.js?v=17';
+import { icon } from '../ui.js?v=17';
+import { st, esc, money, fmtDay, fmtTime, today, plural, head, section, empty, run, render, toast, toMillis, keep, route, arg, routes, actions } from '../core.js?v=17';
+import { DONE_STATES, STEPS, activeOrder, isStale, flow, planId, startOrder, startAmend, startCheck, slotText, findOrder } from '../state.js?v=17';
 
 const CODE_MINUTES = 10; // worker/run.mjs: how long Sainsbury's code is waited for
 const HERO = {
@@ -19,7 +19,10 @@ const HERO = {
   needs_you: ['alert', 'danger', 'The order needs you', ''],
   cancelled: ['x', 'danger', 'Cancelled', ''],
   trial_done: ['check', '', 'Trial finished', ''],
+  checked: ['check', '', 'Checked your Sainsbury\'s orders', ''],
 };
+// A check (Settings › Check Sainsbury's for other orders) only logs in and reads orders.
+const CHECK_STEPS = [...STEPS.slice(0, 3), ['checked', 'Read your Sainsbury\'s orders']];
 const curOrder = () => arg ? findOrder(arg) : (activeOrder() || st.orders[0]);
 const firstName = uid => (st.household.memberNames?.[uid] || '').split(' ')[0];
 const changeText = c => (c > 0 ? `Up ${money(c)} each since last time` : `Down ${money(-c)} each since last time`);
@@ -34,6 +37,7 @@ function hero(o) {
   if (o.state === 'choose_slot' && (o.existing?.length || o.held)) return ['calendar', 'warn', 'Use what you booked, or pick a time', o.existing?.length && o.held ? 'You have more than one booking on Sainsbury\'s around then. Choose the one this shop goes into.' : o.held ? 'You reserved a slot in the Sainsbury\'s app around then.' : 'You already have a Sainsbury\'s order around then.'];
   if (o.state === 'needs_you' && o.finishedElsewhere) return ['clock', '', 'Marking it as ordered', 'Updating staples, meals and the list. This takes a few seconds.'];
   if (o.amend && o.state === 'placed') return ['check', '', 'Order updated', 'What you added is in the order, and off the list.'];
+  if (o.check && o.state === 'logging_in') return ['lock', '', 'Logging in to Sainsbury\'s', 'Then it reads your recent orders. This takes about a minute.'];
   if (o.state === 'need_code') {
     const who = firstName(st.household.codeTo);
     return ['message', 'warn', 'Enter the SMS code', `Sainsbury's has texted a 6-digit code to ${who ? `${esc(who)}'s phone` : 'the phone on the Sainsbury\'s account'}.`];
@@ -52,12 +56,13 @@ routes.order = () => {
   const o = curOrder();
   if (!o) return head('Order') + empty('cart', 'No orders yet', 'Build the basket and tap Send to start one.', '<a class="btn primary" href="#/shop">Go to the basket</a>');
   // A stopped order shows how far it got (stoppedAt: the step it was on).
-  const idx = STEPS.findIndex(s => s[0] === (['failed', 'needs_you'].includes(o.state) && o.stoppedAt ? o.stoppedAt : o.state));
+  const steps = o.check ? CHECK_STEPS : STEPS;
+  const idx = steps.findIndex(s => s[0] === (['failed', 'needs_you'].includes(o.state) && o.stoppedAt ? o.stoppedAt : o.state));
   const [hic, htone, htitle, hsub] = hero(o);
   const into = o.amend || o.addTo; // adding to an order that's already placed
   const kind = o.trial ? 'Trial order' : o.amend ? 'Adding to the order' : 'Order';
-  const eyebrow = o.trial ? `Trial run · nothing is paid${o.addTo ? ` · order ${esc(o.addTo.orderNumber)}` : ''}` : into ? `Sainsbury's order${into.orderNumber ? ` ${esc(into.orderNumber)}` : ''}` : 'Sainsbury\'s order';
-  let html = head(`${kind} for ${fmtDay(o.deliveryDate, { weekday: 'long', day: 'numeric', month: 'short' })}`, { eyebrow, sub: `Started by ${esc(o.requestedBy?.name)}${o.slot ? ` · delivery ${slotText(o)}` : ''}` });
+  const eyebrow = o.check ? 'Sainsbury\'s orders' : o.trial ? `Trial run · nothing is paid${o.addTo ? ` · order ${esc(o.addTo.orderNumber)}` : ''}` : into ? `Sainsbury's order${into.orderNumber ? ` ${esc(into.orderNumber)}` : ''}` : 'Sainsbury\'s order';
+  let html = head(o.check ? 'Orders placed outside the app' : `${kind} for ${fmtDay(o.deliveryDate, { weekday: 'long', day: 'numeric', month: 'short' })}`, { eyebrow, sub: `Started by ${esc(o.requestedBy?.name)}${o.slot ? ` · delivery ${slotText(o)}` : ''}` });
   if (o.week === planId() && !o.trial && !o.amend) html += flow('order');
   if (o.trial && !DONE_STATES.includes(o.state)) html += `<div class="notice info">${icon('info')}<span class="grow"><b>Trial run.</b> ${o.addTo
     ? 'It adds this shop to the order you booked and goes to Sainsbury\'s checkout, then stops before saving. Afterwards it takes out what it added, puts back anything you removed and cancels the changes.'
@@ -77,6 +82,8 @@ routes.order = () => {
       <button class="btn primary lg block" style="margin-top:12px" ${o.smsCode ? 'disabled' : ''}>${o.smsCode ? 'Sent, checking…' : 'Send code'}</button>
       ${st.household.codeTo ? '' : '<p class="tiny muted" style="margin:10px 0 0">Choose who gets the code in <a href="#/settings">Settings › Order helper</a>, so the right phone is told.</p>'}</form>`;
   }
+  if (o.check && o.found?.length) html += `<div class="card flush"><ul class="list">${o.found.map(x => `<li><span class="grow"><span class="name">Delivered ${fmtDay(x.date, { weekday: 'long', day: 'numeric', month: 'short' })}</span>
+    <span class="meta">Order ${esc(x.orderNumber)}${x.total ? ` · ${money(x.total)}` : ''} · ${plural(x.items, 'thing')}, ${plural(x.staples, 'staple')}</span></span></li>`).join('')}</ul></div>`;
   if (o.state === 'choose_slot') {
     const slots = (o.slots || []);
     const days = [...new Set(slots.map(s => s.date))];
@@ -110,10 +117,11 @@ routes.order = () => {
   if (['review', 'placing', 'placed', 'trial_done'].includes(o.state) || (o.basket && ['failed', 'needs_you'].includes(o.state))) html += review(o);
 
   // Once it's placed, the step-by-step progress is history: tuck it away.
-  const stepsHtml = `<ul class="steps">` + STEPS.map(([k, label], i) => { const c = i < idx || o.state === 'placed' ? 'done' : i === idx ? 'now' : ''; return `<li class="${c}"><span class="dot">${c === 'done' ? icon('check') : ''}</span>${label}</li>`; }).join('') + `</ul>`;
-  if (!['placed', 'trial_done'].includes(o.state)) html += section('Progress') + `<div class="card flush">${stepsHtml}</div>`;
-  if (![...DONE_STATES, 'review'].includes(o.state)) html += `<div class="row end" style="margin-top:4px"><button class="btn small ghost danger" data-act="cancelOrder">Cancel order</button></div>`;
-  if (['failed', 'cancelled', 'trial_done'].includes(o.state) && !o.notStarted) html += o.trial || o.amend ? `<a class="btn primary block" href="#/week">Back to the next shop</a>` : `<a class="btn primary block" href="#/shop">Back to the basket to try again</a>`;
+  const stepsHtml = `<ul class="steps">` + steps.map(([k, label], i) => { const c = i < idx || o.state === 'placed' ? 'done' : i === idx ? 'now' : ''; return `<li class="${c}"><span class="dot">${c === 'done' ? icon('check') : ''}</span>${label}</li>`; }).join('') + `</ul>`;
+  if (!['placed', 'trial_done', 'checked'].includes(o.state)) html += section('Progress') + `<div class="card flush">${stepsHtml}</div>`;
+  if (![...DONE_STATES, 'review'].includes(o.state)) html += `<div class="row end" style="margin-top:4px"><button class="btn small ghost danger" data-act="cancelOrder">${o.check ? 'Stop' : 'Cancel order'}</button></div>`;
+  if (o.check && DONE_STATES.includes(o.state)) html += `<a class="btn primary block" href="#/week">Back to the next shop</a>`;
+  else if (['failed', 'cancelled', 'trial_done'].includes(o.state) && !o.notStarted) html += o.trial || o.amend ? `<a class="btn primary block" href="#/week">Back to the next shop</a>` : `<a class="btn primary block" href="#/shop">Back to the basket to try again</a>`;
   if (o.state === 'placed') html += placedActions(o);
   if (o.log?.length) html += `<details class="card flush disclosure" style="margin-top:12px"><summary>${icon('list')} Details</summary><ul class="list compact small">${o.log.slice(-20).map(l => `<li class="muted">${esc(l)}</li>`).join('')}</ul></details>`;
   html += `<a class="btn ghost block" href="#/history" style="margin-top:12px">${icon('list')} All orders</a>`;
@@ -127,7 +135,7 @@ function review(o) {
   const b = o.basket || {};
   const items = b.items || [];
   const canChange = o.state === 'review' && !o.approvedBy;
-  const missing = (o.lines || []).filter(l => l.result && l.result !== 'added');
+  const missing = (o.lines || []).filter(l => l.result && !['added', 'outside'].includes(l.result));
   if (missing.length) html += `<div class="notice warn">${icon('alert')}<span class="grow"><b>${missing.length} not added</b><ul class="list compact" style="margin:6px -16px -10px">${missing.map(l => `<li><span class="grow"><span class="name">${esc(l.name)}</span><span class="meta" style="color:inherit;opacity:.8">${esc(l.result === 'not_found' ? 'Not found' : l.result === 'unavailable' ? 'Unavailable' : l.result)}</span></span></li>`).join('')}</ul></span></div>`;
   // Stand-ins: the usual product couldn't be added, so the nearest match went in instead.
   const standIns = (o.lines || []).filter(l => l.standIn && l.result === 'added');
@@ -147,6 +155,21 @@ function review(o) {
         ${l.swap.error ? `<span class="meta" style="color:var(--danger)">${esc(l.swap.error)}</span>` : ''}</span>
         ${o.state === 'review' && !l.swap.failed ? `<button class="btn small outline" data-act="undoSwap" data-id="${esc(l.key)}" ${waiting ? 'disabled' : ''}>${waiting ? 'Switching…' : 'Switch back'}</button>` : ''}</li>`;
     }).join('') + undone.map(l => `<li><span class="grow"><span class="name">${esc(l.product)}${(l.qty || 1) > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span><span class="meta">Switched back from ${esc(l.undone.product)} (the offer would have saved ${money(l.undone.saving)})</span></span><span class="pill">Your usual</span></li>`).join('') + `</ul></div>`;
+  }
+  // Staples left out because an order placed outside the app (or something
+  // added to an order in the Sainsbury's app) bought them lately.
+  const outside = (o.lines || []).filter(l => l.result === 'outside');
+  if (outside.length) {
+    const backing = new Set(o.putBack || []);
+    html += section('Left out, bought lately', { count: outside.length });
+    html += `<div class="card flush"><p class="small muted" style="margin:0;padding:12px 16px 0">These staples were in an order placed outside the app, so they aren't due yet. Put back any you need anyway.</p><ul class="list">` + outside.map(l => {
+      const waiting = backing.has(l.key) && !l.outside?.failed;
+      const when = l.outside?.date ? fmtDay(l.outside.date, { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+      return `<li><span class="grow"><span class="name">${esc(l.product || l.name)}${(l.qty || 1) > 1 ? `<span class="qty">×${l.qty}</span>` : ''}</span>
+        <span class="meta">${l.outside?.inOrder ? 'Added in the Sainsbury\'s app to the order' : 'Bought in the order'} delivered ${esc(when)}</span>
+        ${l.outside?.error ? `<span class="meta" style="color:var(--danger)">${esc(l.outside.error)}</span>` : ''}</span>
+        ${canChange && !l.outside?.failed ? `<button class="btn small outline" data-act="putBack" data-id="${esc(l.key)}" ${waiting ? 'disabled' : ''}>${waiting ? 'Adding…' : 'Put it back'}</button>` : ''}</li>`;
+    }).join('') + `</ul></div>`;
   }
   // In the basket but not from this shop: left there from before (or, when
   // adding to an order, what's already in it).
@@ -178,7 +201,7 @@ function review(o) {
     <details class="disclosure" data-toggle="basketOpen" ${keep.basketOpen ? 'open' : ''} style="border-top:1px solid var(--line)"><summary>${icon('bag')} Everything in the ${o.amend || o.addTo ? 'order' : 'basket'} <span class="count">${items.length}</span></summary>
     <ul class="list compact">` + items.map(i => `<li><span class="grow"><span class="name">${esc(i.name)}${i.qty > 1 ? `<span class="qty">×${i.qty}</span>` : ''}</span>${i.offer ? `<span class="meta" style="color:var(--warm)">${esc(i.offer)}</span>` : ''}${i.change ? `<span class="meta${i.change > 0 ? ' up' : ''}">${changeText(i.change)}</span>` : ''}${swaps.some(l => String(l.uid) === String(i.uid)) ? `<span class="meta">Swapped in for an offer</span>` : ''}</span><span class="price">${money(i.total)}</span></li>`).join('') + `</ul></details></div>`;
   if (o.state === 'review') {
-    const switching = swaps.some(l => asked.has(l.key) && !l.swap.failed) || refreshing || extra.some(i => removing.has(String(i.uid)));
+    const switching = swaps.some(l => asked.has(l.key) && !l.swap.failed) || outside.some(l => (o.putBack || []).includes(l.key) && !l.outside?.failed) || refreshing || extra.some(i => removing.has(String(i.uid)));
     const into = o.amend || o.addTo;
     const label = o.approvedBy ? (o.trial ? 'Checking out…' : into ? 'Updating…' : 'Placing…') : switching ? 'Updating the total…' : o.trial ? `Check out (trial, ${money(o.total)})` : into ? `Update order, ${money(o.total)}` : `Approve ${money(o.total)}`;
     const note = o.trial ? `Goes to Sainsbury's checkout and reads the total, but doesn't ${o.addTo ? 'save the changes' : 'press Place order'}. Nothing is paid.` : into ? 'Approving saves the changes to your Sainsbury\'s order.' : 'Approving places the order with Sainsbury\'s. You can still add to it here until the evening before delivery.';
@@ -213,6 +236,7 @@ actions.code = f => {
 };
 actions.slot = el => run(() => S.updateH(['orders', curOrder().id], { slotChoice: el.dataset.id, slotBy: S.me() }));
 actions.undoSwap = el => run(() => S.updateH(['orders', curOrder().id], { undoSwaps: S.arrayUnion(el.dataset.id) }));
+actions.putBack = el => run(() => S.updateH(['orders', curOrder().id], { putBack: S.arrayUnion(el.dataset.id) }));
 actions.refreshTotal = () => run(() => S.updateH(['orders', curOrder().id], { refreshAsked: Date.now() }), 'Reading the basket again…');
 actions.removeExtra = el => {
   const o = curOrder(); const i = (o.basket?.items || []).find(x => String(x.uid) === el.dataset.id);
@@ -232,6 +256,7 @@ actions.cancelOrder = () => {
     run(() => S.updateH(['orders', o.id], { state: 'cancelled', cancelRequested: S.me(), message: 'Marked as not ordered here. Nothing was changed on Sainsbury\'s.' }));
     return;
   }
+  if (o.check) { run(() => S.updateH(['orders', o.id], { cancelRequested: S.me() })); return; }
   if (!confirm(o.amend || o.addTo ? 'Stop adding to the order? Anything added is taken out again and the order stays as it was.' : 'Cancel this order? The slot is released and the basket is left as it is.')) return;
   run(() => S.updateH(['orders', o.id], { cancelRequested: S.me() }));
 };
@@ -251,7 +276,7 @@ actions.retryOrder = () => run(async () => {
     await new Promise(r => setTimeout(r, 100));
   }
   const of = o.amend && st.orders.find(x => x.id === o.amend.of);
-  if (of) await startAmend(of); else await startOrder(!!o.trial);
+  if (o.check) await startCheck(); else if (of) await startAmend(of); else await startOrder(!!o.trial);
 });
 
 // The SMS countdown and the "didn't start" check change with time, not data.

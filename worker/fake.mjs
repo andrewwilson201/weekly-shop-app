@@ -60,9 +60,23 @@ export class FakeSainsburys {
     return { start_time: start.toISOString().replace('.000', ''), end_time: new Date(start.getTime() + 36e5).toISOString().replace('.000', '') };
   }
   async orders() {
-    if (!process.env.FAKE_BOOKED) return [];
-    const s = this.bookedSlot();
-    return [{ order_uid: '1000000002', status: 'placed', total: '33.50', slot_start_time: s.start_time, slot_end_time: s.end_time }];
+    const out = [];
+    if (process.env.FAKE_BOOKED) {
+      const s = this.bookedSlot();
+      out.push({ order_uid: '1000000002', status: 'placed', total: '33.50', slot_start_time: s.start_time, slot_end_time: s.end_time });
+    }
+    // FAKE_OUTSIDE=<product uids>: an order placed in the Sainsbury's app
+    // yesterday morning with those products in it (comma-separated), numbered
+    // FAKE_OUTSIDE_NO (default 1000000003).
+    if (process.env.FAKE_OUTSIDE) {
+      const s = new Date(Date.now() - 864e5); s.setUTCHours(9, 0, 0, 0);
+      out.push({ order_uid: process.env.FAKE_OUTSIDE_NO || '1000000003', status: 'previous', total: '41.20', slot_start_time: s.toISOString().replace('.000', ''), slot_end_time: new Date(s.getTime() + 36e5).toISOString().replace('.000', '') });
+    }
+    return out;
+  }
+  async order(orderNumber) {
+    if (!process.env.FAKE_OUTSIDE || orderNumber !== (process.env.FAKE_OUTSIDE_NO || '1000000003')) return { order_items: [] };
+    return { order_items: process.env.FAKE_OUTSIDE.split(',').map(u => ({ quantity: 1, uom: 'ea', sub_total: 2, product: { product_uid: u.trim(), name: `Outside order item ${u.trim()}` } })) };
   }
   // Adding to a placed order: the basket opens with the order's items in it.
   async startAmend(orderNumber) {

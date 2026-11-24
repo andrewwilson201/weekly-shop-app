@@ -164,6 +164,8 @@ export class Sainsburys {
     const d = await this.api('GET', '/order/v1/order', { params: { page_size: 10, page_number: 1 } });
     return d?.orders || [];
   }
+  // One order with what was in it (order_items[{ quantity, uom, product: { product_uid, name } }]).
+  order(orderNumber) { return this.api('GET', `/order/v1/order/${encodeURIComponent(orderNumber)}`); }
 
   // Goes trolley → checkout → summary and presses "Place order". Returns { orderNumber, card, total }.
   // If the bank asks for an extra check, throws an error with code 'BANK_CHECK'.

@@ -1,9 +1,9 @@
 // Settings: the household, notifications, the order helper, and data.
-import * as S from '../store.js?v=16';
-import { iso, ideaMix, MIX_MAX, MIX_TOTAL_MAX } from '../plan.js?v=16';
-import { icon, avatar } from '../ui.js?v=16';
-import { st, esc, fmtDay, today, head, section, run, render, toast, hostOf, keep, routes, actions } from '../core.js?v=16';
-import { activeOrder, householdServes, startOrder } from '../state.js?v=16';
+import * as S from '../store.js?v=17';
+import { iso, ideaMix, MIX_MAX, MIX_TOTAL_MAX } from '../plan.js?v=17';
+import { icon, avatar } from '../ui.js?v=17';
+import { st, esc, fmtDay, today, head, section, run, render, toast, hostOf, keep, toMillis, routes, actions } from '../core.js?v=17';
+import { activeOrder, householdServes, startOrder, startCheck } from '../state.js?v=17';
 
 routes.settings = () => {
   const h = st.household;
@@ -33,6 +33,7 @@ routes.settings = () => {
         <select data-change="codeTo" aria-label="Who gets the SMS code" style="width:auto;flex:none"><option value="">Not set</option>${Object.entries(h.memberNames || {}).map(([uid, name]) => `<option value="${esc(uid)}"${h.codeTo === uid ? ' selected' : ''}>${esc(name.split(' ')[0])}</option>`).join('')}</select></div>
       <div style="padding-top:14px"><b>Trial run</b><p class="small muted" style="margin:2px 0 12px">Checks the whole Sainsbury's order works without buying anything: it logs in (you'll need the SMS code), books a slot (or opens the order you booked in the Sainsbury's app, if the next shop is marked as booked or you pick it), fills the basket with the next shop, goes to checkout and reads the total, then stops before Place order. Afterwards it takes out what it added and releases the slot, or cancels the changes to your booked order.</p>
       ${activeOrder() ? `<a class="btn outline block" href="#/order">An order is running: view it</a>` : `<button class="btn tonal block" data-act="trialOrder">${icon('cart')} Start a trial run</button>`}</div>
+      ${outsideCard()}
       <a class="btn ghost block" href="#/history" style="margin-top:8px">${icon('list')} Order history</a></div>
 
     ${section('Prices')}
@@ -86,6 +87,14 @@ actions.exportData = () => run(async () => {
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10e3);
 }, 'Downloaded');
+// Orders placed straight in the Sainsbury's app: each order run counts them
+// anyway; this is for counting one straight away (worker/outside.mjs).
+function outsideCard() {
+  const last = st.orders.find(o => o.check && o.state === 'checked');
+  return `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)"><b>Orders placed outside the app</b><p class="small muted" style="margin:2px 0 12px">Shopped straight in the Sainsbury's app? Each order from here reads your recent Sainsbury's orders first, counts the staples they bought and leaves out the ones that aren't due again yet. Check now to update staples before planning the next shop (you'll need the SMS code).${last ? ` Last checked ${fmtDay(iso(toMillis(last.createdAt) || Date.now()), { weekday: 'short', day: 'numeric', month: 'short' })}.` : ''}</p>
+    ${activeOrder() ? '' : `<button class="btn outline block" data-act="checkOutside">${icon('repeat')} Check Sainsbury's for other orders</button>`}</div>`;
+}
+actions.checkOutside = () => { if (confirm('Log in to Sainsbury\'s and read your recent orders? You\'ll need the SMS code. Nothing is booked or bought.')) startCheck(); };
 actions.trialOrder = () => { if (confirm('Start a trial run? You\'ll need the SMS code from Sainsbury\'s. Nothing is bought.')) startOrder(true); };
 actions.notifyOn = () => run(async () => { await S.enableNotifications(); render(); }, 'Notifications are on for this phone');
 actions.notifyOff = () => run(async () => { await S.disableNotifications(); render(); }, 'Notifications are off for this phone');

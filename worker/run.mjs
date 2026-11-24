@@ -25,6 +25,7 @@ import { makeJobs } from './jobs.mjs';
 import { notify } from './notify.mjs';
 import { claudeUsual, claudeSwaps, claudeStandIn } from './ideas-claude.mjs';
 import { households as allowedHouseholdDocs } from './access.mjs';
+import { countOutside } from './outside.mjs';
 
 // SAINSBURYS_FAKE=1 swaps in a pretend shop, for testing the app end to end.
 // The real one loads Playwright, so it's imported only when needed.
@@ -34,7 +35,7 @@ async function makeShop(opts) {
   const { Sainsburys: Real } = await import('./sainsburys.mjs');
   return new Real(opts);
 }
-import { iso, daysBetween, upcomingOrders, ordersNear, heldSlot, bookedChoice, usualCandidates, searchTerms, cheapestSwap, priceChange } from '../js/plan.js';
+import { iso, addDays, daysBetween, stapleStatus, upcomingOrders, ordersNear, heldSlot, bookedChoice, usualCandidates, searchTerms, cheapestSwap, priceChange } from '../js/plan.js';
 
 // The worker's own key if it has one (database and notifications only), else the deploy key.
 const sa = process.env.WORKER_SERVICE_ACCOUNT || process.env.FIREBASE_SERVICE_ACCOUNT;
@@ -45,6 +46,7 @@ const { makeIdeas, processImport, claimImport, claimIdeas, fillIngredients, fill
 
 const DEADLINE = Date.now() + (Number(process.env.WORKER_MINUTES) || 50) * 60000;
 const ACTIVE = ['requested', 'logging_in', 'need_code', 'choose_slot', 'filling', 'review', 'placing'];
+// A check (order.check, from Settings) only logs in and counts orders placed outside the app → checked.
 // An order the worker hasn't picked up within this long is never started: the
 // instant start failed and GitHub's backup timer can be hours late, and nobody
 // wants an SMS code at 3am for an order they gave up on. The app offers "Try again".
@@ -173,6 +175,18 @@ async function processOrder({ h, ref }) {
       return code;
     });
 
+    // Settings › "Check Sainsbury's for other orders": count what orders placed
+    // outside the app bought, then stop. Nothing is booked or added.
+    if (order.check) {
+      const { found } = await countOutside(h, shop, { day: addDays(iso(new Date()), 1), log });
+      const n = found.reduce((t, o) => t + o.staples, 0);
+      await update({ state: 'checked', found, message: found.length
+        ? `Found ${found.length === 1 ? 'an order' : `${found.length} orders`} placed outside the app. ${n ? `${n} staple${n === 1 ? '' : 's'} in ${found.length === 1 ? 'it' : 'them'} now count${n === 1 ? 's' : ''} as bought, so ${n === 1 ? 'it isn\'t' : 'they aren\'t'} due again until the usual time.` : 'None of your staples were in it.'}`
+        : 'No new orders placed outside the app. Staples are up to date.' });
+      await log(found.length ? `Checked: ${found.length} order(s) placed outside the app` : 'Checked: nothing new');
+      return;
+    }
+
     // Which order this shop goes into: a new slot, or an order already placed.
     const picked = order.amend
       ? { amendNo: order.amend.orderNumber }
@@ -205,10 +219,23 @@ async function processOrder({ h, ref }) {
     const before = await shop.basket(slotDate);
     if (before?.items?.length) await log(amendNo ? `The order has ${before.items.length} items so far` : `The basket already had ${before.items.length} items; they're kept`);
     const lines = (await read()).lines || [];
+    // Orders placed outside the app since the last shop (in the Sainsbury's
+    // app, or added to an order there): count what they bought, and leave out
+    // staples they've covered. "Put it back" on the review screen adds one.
+    const day = res?.slot?.start_time ? londonDate(res.slot.start_time) : order.deliveryDate;
+    const { caught } = await countOutside(h, shop, { day, skip: amendNo, log });
+    let leftOut = 0;
+    for (const l of lines) {
+      if (l.source !== 'staple' || l.status !== 'add' || l.result) continue;
+      const c = caught.get(l.key.slice(7));
+      if (c && stapleStatus(c.staple, day) === 'not_due') { l.result = 'outside'; l.outside = { date: c.date, orderNumber: c.orderNumber, ...(c.fromApp ? { inOrder: true } : {}) }; leftOut++; }
+    }
+    if (leftOut) await log(`Left out ${leftOut} staple${leftOut === 1 ? '' : 's'} bought in an order placed outside the app`);
     await pickUsual(h, lines, log);
     await pickCheaper(h, lines, shop, log);
     await update({ lines });
     for (const line of lines) {
+      if (line.result === 'outside') continue;
       try {
         let uid = line.uid;
         if (!uid) {
@@ -299,6 +326,24 @@ async function processOrder({ h, ref }) {
       await update({ lines, basket, total });
       return true;
     };
+    // "Put it back" on a staple left out because an order placed outside the
+    // app bought it: add it after all.
+    const putBack = async d => {
+      const todo = lines.filter(l => l.result === 'outside' && !l.outside?.failed && (d.putBack || []).includes(l.key));
+      if (!todo.length) return false;
+      for (const l of todo) {
+        try {
+          await shop.add(l.uid, l.qty || 1, slotDate);
+          l.putBack = l.outside; delete l.outside; l.result = 'added';
+          await log(`Put ${l.name} back in`);
+        } catch (e) {
+          l.outside.failed = true; l.outside.error = 'Couldn\'t add it. Add it in the Sainsbury\'s app.';
+        }
+      }
+      ({ basket, total } = await readBasket());
+      await update({ lines, basket, total });
+      return true;
+    };
     // "Refresh the total" (after changing things in the Sainsbury's app) and
     // "Remove" on things that were already in the basket.
     let refreshed = order.refreshAsked || 0;
@@ -321,6 +366,7 @@ async function processOrder({ h, ref }) {
     const ok = await waitFor(async d => {
       const changed = await refresh(d);
       if (changed && d.approvedBy && Math.abs((d.approvedTotal || 0) - total) > 0.005) { await update({ approvedBy: FieldValue.delete(), approvedTotal: FieldValue.delete() }); return null; }
+      if (await putBack(d) && d.approvedBy && Math.abs((d.approvedTotal || 0) - total) > 0.005) { await update({ approvedBy: FieldValue.delete(), approvedTotal: FieldValue.delete() }); return null; }
       if (await undoSwaps({ undoSwaps: (d.undoSwaps || []).filter(k => !lines.find(l => l.key === k)?.swap?.failed) })) {
         // An approval of the old total doesn't count for the new one.
         if (d.approvedBy && Math.abs((d.approvedTotal || 0) - total) > 0.005) { await update({ approvedBy: FieldValue.delete(), approvedTotal: FieldValue.delete() }); return null; }
@@ -539,7 +585,7 @@ async function pickCheaper(h, lines, shop, log) {
   const asks = [], found = new Map();
   await log('Checking prices, offers and Nectar prices');
   for (const l of lines) {
-    if (l.keep) continue;
+    if (l.keep || l.result === 'outside') continue;
     let hits;
     try { hits = await shop.search(l.search || searchTerms(l.product || l.name) || l.name, 12); } catch { continue; }
     let ref = l.uid ? hits.find(p => String(p.uid) === String(l.uid)) : hits.find(p => p.available);

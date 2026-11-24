@@ -1,9 +1,9 @@
 // Recipes: the dinners shopped for, and each one's recipe to cook from.
-import * as S from '../store.js?v=16';
-import { servesNumber, scaleFor, scaleLine, planDate, kidsNote } from '../plan.js?v=16';
-import { icon, tile } from '../ui.js?v=16';
-import { esc, fmtDay, today, head, section, empty, run, toast, render, hostOf, keep, route, arg, routes, actions, hooks } from '../core.js?v=16';
-import { mealById, planId, cookList, hasMethod, askRecipe, householdServes } from '../state.js?v=16';
+import * as S from '../store.js?v=17';
+import { servesNumber, scaleFor, scaleLine, planDate, kidsNote } from '../plan.js?v=17';
+import { icon, tile } from '../ui.js?v=17';
+import { esc, fmtDay, today, head, section, empty, run, toast, render, hostOf, keep, route, arg, routes, actions, hooks } from '../core.js?v=17';
+import { mealById, planId, cookList, hasMethod, askRecipe, householdServes } from '../state.js?v=17';
 
 // Each shop's dinners are headed by when it arrives.
 const weekName = (wid, x) => wid === planId() ? 'Next shop' : x?.delivery ? `Shop for ${fmtDay(x.delivery)}` : `Shop started ${fmtDay(planDate(wid))}`;

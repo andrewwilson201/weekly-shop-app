@@ -74,6 +74,9 @@ export function stapleStatus(s, delivery) {
   if (s.dropped) return 'dropped';
   const rule = skipRule(s);
   if (s.skipped_on && daysBetween(s.skipped_on, delivery) < Math.min(7, s.every_days || 7)) return 'not_due';
+  // Bought just now in an order placed outside the app (see ordersToCount):
+  // not due yet, even an every-week thing.
+  if (s.outside?.date && s.outside.date === s.last_bought && boughtRecently(s, s.last_bought, delivery)) return 'not_due';
   if (rule === 'every_week') return 'add';
   if (!s.last_bought || !s.every_days) return rule === 'suggest' ? 'suggest' : 'add';
   const since = daysBetween(s.last_bought, delivery);
@@ -520,4 +523,45 @@ export function bookedChoice(existing = [], held = null, day, booked = false) {
   if (!booked) return null;
   const all = [...existing.map(o => ({ kind: 'order', date: o.date, id: o.orderNumber })), ...(held ? [{ kind: 'held', date: held.date, id: 'held' }] : [])];
   return all.length === 1 && all[0].date === day ? all[0] : null;
+}
+
+// ---------- orders placed outside the app ----------
+// Shopping straight in the Sainsbury's app (or adding to an order there) means
+// staples were bought that the app didn't see. Each order run reads the
+// Sainsbury's order list (/order/v1/order) and counts the contents of any order
+// not counted yet: delivered, or arriving before this shop's `day`, and not
+// cancelled. `skip` is the order this shop is going into, if any. Returns
+// [{ orderNumber, date, start_time, total, arrived }], oldest first; `arrived`
+// orders can't change any more, so they're only counted once.
+export function ordersToCount(raw = [], { counted = [], day, skip = '', now = new Date() } = {}) {
+  const done = new Set(counted.map(String));
+  return raw
+    .filter(o => o?.order_uid && o.slot_start_time && !done.has(String(o.order_uid)) && String(o.order_uid) !== String(skip || ''))
+    .filter(o => !/cancel|refund/i.test(String(o.status || '')))
+    .map(o => ({ orderNumber: String(o.order_uid), date: iso(o.slot_start_time), start_time: o.slot_start_time, total: Number(o.total) || 0, arrived: new Date(o.slot_start_time) <= now }))
+    .filter(o => !day || o.date < day)
+    .sort((a, b) => a.start_time.localeCompare(b.start_time));
+}
+// What's in one order (/order/v1/order/{number}): [{ uid, name, qty }]. Things
+// sold by weight count as one each.
+export function orderItems(detail) {
+  return (detail?.order_items || detail?.order?.order_items || [])
+    .filter(i => i?.product?.product_uid)
+    .map(i => ({ uid: String(i.product.product_uid), name: i.product.name || '', qty: !i.uom || i.uom === 'ea' ? Math.max(1, Math.round(Number(i.quantity) || 1)) : 1 }));
+}
+// The staples an order bought, if it's newer than what the app already knows
+// (an older order, or the app's own one, is already counted): [{ s, qty }].
+export function stapleBuys(staples = [], items = [], date) {
+  const qty = new Map();
+  for (const i of items) qty.set(i.uid, (qty.get(i.uid) || 0) + (i.qty || 1));
+  return staples
+    .map(s => ({ s, qty: qty.get(String(s.id)) || qty.get(String(s.product_uid)) || 0 }))
+    .filter(x => x.qty && (!x.s.last_bought || date > x.s.last_bought));
+}
+// A staple due in this shop that was bought outside the app on `date` is left
+// out if the next one wouldn't be due yet by the usual rule (bought within
+// every_days − 3 of the delivery). That goes for every-week things too:
+// milk bought on Monday doesn't need buying again for Wednesday.
+export function boughtRecently(s, date, delivery) {
+  return !!date && daysBetween(date, delivery) >= 0 && daysBetween(date, delivery) + 3 < (s.every_days || 7);
 }
